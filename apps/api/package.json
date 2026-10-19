@@ -9,7 +9,8 @@
     "start": "node dist/server.js",
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run",
-    "bench": "tsx bench/run.ts"
+    "bench": "tsx bench/run.ts",
+    "fixtures:parity": "tsx scripts/export-parity-fixtures.ts"
   },
   "dependencies": {
     "express": "^5.0.0"

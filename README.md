@@ -8,7 +8,7 @@ A portfolio project demonstrating practical C++ integration in a web product. It
 2. **Native C++ engine** called from Node.js through Node-API (`node-addon-api`).
 3. **WebAssembly** build of the same portable C++ core, executed in the browser.
 
-> **Status: Stage 1 complete.** A deterministic TypeScript analytics engine, the API endpoints around it, and a TypeScript-only benchmark baseline exist. The C++ core, Node-API addon and WebAssembly build do **not** exist yet, so there is nothing to compare against and no speedup is claimed.
+> **Status: Stage 2 complete.** A deterministic TypeScript analytics engine (the behavioral reference), the API endpoints around it, a TypeScript-only benchmark baseline, and a standalone C++20 core with bit-exact parity tests exist. The Node-API addon and WebAssembly build do **not** exist yet, the C++ core has not been benchmarked, and no speedup is claimed.
 
 ## Architecture
 
@@ -18,7 +18,9 @@ apps/
          src/analytics/  framework-independent TypeScript reference engine (no Express imports)
          bench/          benchmark script
   web/   React + Vite + TypeScript. UI and visualization only.
-cpp/     (planned) core/ portable C++20 library, addon/ Node-API binding, wasm/ Emscripten binding, tests/
+cpp/     core/  portable C++20 library (no Node/V8/browser/Emscripten dependencies)
+         tests/ GoogleTest suite + parity fixture generated from the TypeScript engine
+         (planned) addon/ Node-API binding, wasm/ Emscripten binding
 ```
 
 Principles:
@@ -32,7 +34,7 @@ Principles:
 | Tool | Needed for | Version |
 | --- | --- | --- |
 | Node.js + npm | everything now | Node >= 22.12 (see `.nvmrc`) |
-| C++20 compiler + CMake >= 3.24 | Stage 2+ (not needed yet) | MSVC (VS 2022 "Desktop development with C++"), GCC or Clang |
+| C++20 compiler + CMake >= 3.24 | the C++ core and its tests (Stage 2+) | MSVC (VS 2022 "Desktop development with C++"; verified), GCC or Clang (not yet verified) |
 | Emscripten SDK | Stage 4+ (not needed yet) | latest stable |
 
 ## Commands
@@ -46,7 +48,27 @@ npm run typecheck    # strict TypeScript check in all workspaces
 npm test             # Vitest in all workspaces
 npm run build        # build API (tsc -> apps/api/dist) and web (vite -> apps/web/dist)
 npm run bench        # TypeScript baseline benchmark (see below)
+npm run fixtures:parity   # regenerate cpp/tests/fixtures/parity.txt from the TypeScript engine
 ```
+
+### C++ core (from `cpp/`)
+
+```powershell
+# Windows, Visual Studio 2022 (use a Developer PowerShell, or put the CMake bundled with VS on PATH)
+cmake --preset msvc
+cmake --build --preset msvc-release
+ctest --preset msvc-release
+cmake --build --preset msvc-debug; ctest --preset msvc-debug   # also run Debug
+```
+
+```bash
+# Linux (GCC/Clang + Ninja) - written for portability, not yet verified
+cmake --preset linux && cmake --build --preset linux && ctest --preset linux
+```
+
+The first configure downloads GoogleTest 1.17.0 (pinned by SHA-256). Build output goes to the git-ignored `cpp/build/`. Details and parity guarantees: [`cpp/README.md`](cpp/README.md).
+
+**Parity workflow:** the TypeScript engine is the source of truth. `npm run fixtures:parity` writes `cpp/tests/fixtures/parity.txt` (generated events, analytics results, and validation error messages); the C++ tests compare every double by bit pattern. `npm test` fails if the committed fixture is stale.
 
 Single workspace: `npm run dev:api`, `npm run dev:web`, or `npm test -w @hpa/api`.
 
@@ -153,7 +175,7 @@ The benchmark first verifies each dataset against an independent naive oracle (s
 
 - [x] **Stage 0** – Monorepo scaffold, health endpoint, placeholder UI, tests.
 - [x] **Stage 1** – Synthetic event generator, analytics spec, TypeScript baseline, API endpoints with input validation, benchmark baseline.
-- [ ] **Stage 2** – C++20 core + GoogleTest, CMake build, parity tests against the TypeScript baseline.
+- [x] **Stage 2** – C++20 core + GoogleTest, CMake build, bit-exact parity tests against the TypeScript baseline (MSVC verified; GCC/Clang pending CI).
 - [ ] **Stage 3** – Node-API addon exposing the core to the API.
 - [ ] **Stage 4** – WebAssembly build (Emscripten) and in-browser execution.
 - [ ] **Stage 5** – Reproducible benchmarks and comparison UI.
