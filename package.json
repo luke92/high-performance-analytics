@@ -4,15 +4,20 @@
   "private": true,
   "description": "Web analytics platform comparing TypeScript, native C++ (Node-API) and WebAssembly implementations.",
   "license": "MIT",
-  "engines": { "node": ">=22.12.0" },
-  "workspaces": ["apps/*"],
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "workspaces": [
+    "apps/*"
+  ],
   "scripts": {
     "dev": "npm-run-all --parallel dev:api dev:web",
     "dev:api": "npm run dev -w @hpa/api",
     "dev:web": "npm run dev -w @hpa/web",
     "build": "npm run build --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
-    "test": "npm run test --workspaces --if-present"
+    "test": "npm run test --workspaces --if-present",
+    "bench": "npm run bench -w @hpa/api --"
   },
   "devDependencies": {
     "npm-run-all2": "^8.0.0",
