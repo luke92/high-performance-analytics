@@ -8,7 +8,7 @@ A portfolio project demonstrating practical C++ integration in a web product. It
 2. **Native C++ engine** called from Node.js through Node-API (`node-addon-api`).
 3. **WebAssembly** build of the same portable C++ core, executed in the browser.
 
-> **Status: Stage 3 complete.** A deterministic TypeScript engine (the behavioral reference), a standalone C++20 core with bit-exact parity tests, and a Node-API addon that exposes the core to the Express API (`engine: "native"`) exist. The WebAssembly build does **not** exist yet. **Nothing has been benchmarked against the native engine, so no speedup is claimed.** Windows/MSVC is the only verified platform; a GitHub Actions workflow for Windows and Ubuntu is in the repository but has not run yet.
+> **Status: Stage 3 complete.** A deterministic TypeScript engine (the behavioral reference), a standalone C++20 core with bit-exact parity tests, and a Node-API addon that exposes the core to the Express API (`engine: "native"`) exist. The WebAssembly build does **not** exist yet. **A fair TypeScript-vs-native benchmark exists (see [Benchmark: TypeScript vs native](#benchmark-typescript-vs-native-c)); on the one machine measured, the native engine called through Node-API is currently *slower* than TypeScript, even though the C++ core alone is faster.** Windows/MSVC is the only verified platform; a GitHub Actions workflow for Windows and Ubuntu is in the repository but has not run yet.
 
 ## Architecture
 
@@ -201,7 +201,48 @@ HPA_REQUIRE_NATIVE=1 npm test       # PowerShell: $env:HPA_REQUIRE_NATIVE = "1";
 
 The native suite replays the parity cases and a table of malformed inputs through both engines and requires identical results (compared with `Object.is`, so `-0` differs from `0`, and with equal key order) or identical error messages.
 
-The benchmark first verifies each dataset against an independent naive oracle (sort with comparator, linear bin assignment) and checks determinism; it aborts if anything differs, **before** recording timings. Timing uses `performance.now()` (monotonic) around `computeAnalytics` (which includes input validation) and `generateEvents`, after warm-up runs. It prints the Node/V8 version, OS, CPU, RAM, and min/median/max per size. Results are specific to the machine and are not committed; run it yourself. The benchmark measures only the TypeScript engine; the native engine has **not** been benchmarked, so no comparison or speedup is claimed.
+The benchmark first verifies each dataset against an independent naive oracle (sort with comparator, linear bin assignment) and checks determinism; it aborts if anything differs, **before** recording timings. Timing uses `performance.now()` (monotonic) around `computeAnalytics` (which includes input validation) and `generateEvents`, after warm-up runs. It prints the Node/V8 version, OS, CPU, RAM, and min/median/max per size. Results are specific to the machine and are not committed; run it yourself. `npm run bench` measures only the TypeScript engine; the cross-engine comparison is `npm run bench:compare` (next section).
+
+## Benchmark: TypeScript vs native C++
+
+```bash
+npm run native:build         # the Node-API addon (once)
+npm run bench:core:build     # cpp/build/bench/bin/hpa_bench, the direct C++ core benchmark (once; needs cmake on PATH)
+npm run bench:compare        # ~1 minute; prints a summary and writes bench-results/compare-<timestamp>.json (git-ignored)
+npm run bench:compare -- --sizes=10000 --runs=30 --skip-http --json   # options: see the header of apps/api/bench/compare.ts
+```
+
+**What is measured** (the JSON report repeats these definitions, plus the raw samples of every run):
+
+| Section | Sizes | What it covers |
+| --- | --- | --- |
+| 1. In-process | 10,000 and 100,000 | Direct calls of `computeAnalytics` (TypeScript) and the addon on the *same pre-generated array of JS objects*. The native number includes JS→C++ conversion of every event, core validation, core compute and building the JS result. A probe call (`histogramBins: 0`, which fails after conversion and validation) splits the native time into input conversion vs compute + result. |
+| 2. HTTP | 10,000 and 100,000 | `POST /api/analytics/compute` against the real Express app on loopback, same body for both engines. Includes request JSON parsing and response serialisation, which are identical for both engines, so differences are diluted. |
+| 3. Direct core | 10,000, 100,000 and 1,000,000 | The TypeScript engine vs `hpa::core` called directly from a C++ executable: no JS↔C++ boundary, no HTTP. The 1,000,000-event case exists only here (the API accepts at most 100,000). Generate / validate / compute are timed separately. |
+
+**Method.** Every size of every section runs in a *fresh process* (V8 heap/JIT state left by one size changed another size's allocation-heavy timings by 10x when I tried a single process). Within a process: warm-up iterations, then timed runs (20 / 10 / 10), engine order alternating each iteration, an untimed garbage collection before every sample, monotonic timers. Before any timing is accepted, both engines must return **identical** results (`Object.is` on every number, same key order; the C++ executable prints its full result with 17 significant digits), and the TypeScript result must also match an independent naive oracle; a mismatch aborts the run and writes no report (I verified this by deliberately breaking the addon). Reported per metric: median, p25/p75, min/max, MAD, CV and raw samples. A verdict of "faster/slower" requires the 95% bootstrap interval (seeded, 2000 resamples) of the median ratio to exclude 1 *and* an effect of at least 5%; otherwise it says "inconclusive". The environment (OS, CPU, RAM, Node/V8, compilers and build configuration of the addon and the benchmark executable, commit, dirty flag, seed, warm-ups, runs) is recorded in the report.
+
+**Results** from one machine (Windows 10, Intel i5-7400 @ 3.0 GHz x4, 16 GiB, Node 22.21, MSVC 19.43 Release), seed 42, 10 bins. Medians in ms. Across three separate invocations the in-process compute medians varied by less than 4%; HTTP and the noisier direct-core cases varied by up to about 8-11%.
+
+| Level | Events | TypeScript | Native / C++ | Verdict |
+| --- | ---: | ---: | ---: | --- |
+| In-process compute | 10,000 | 3.28 | 12.39 (addon) | native 3.8x **slower** |
+| In-process compute | 100,000 | 36.24 | 124.5 (addon) | native 3.4x **slower** |
+| HTTP request | 10,000 | 17.08 | 24.98 (native) | native 1.5x **slower** |
+| HTTP request | 100,000 | 169.9 | 258.9 (native) | native 1.5x **slower** |
+| Direct core compute | 100,000 | 36.28 | 24.64 (C++) | C++ core 1.5x faster |
+| Direct core compute | 1,000,000 | 386.1 | 257.0 (C++) | C++ core 1.5x faster |
+| Direct core validation | 1,000,000 | 153.9 | 33.34 (C++) | C++ core 4.6x faster |
+
+(10,000-event direct-core compute: 3.84 vs 2.25, ratio 1.7, but the TypeScript run was noisy, CV 17%; see the report for every size.)
+
+**What the numbers say, and what they do not:**
+
+- With the current Node-API design, calling the native engine is slower than staying in TypeScript for request-sized inputs. In the in-process split, about 10.3 ms of the 12.4 ms (10,000 events) and 100 ms of the 124.5 ms (100,000 events) is converting the JS objects to C++ (roughly 1 µs per event); compute plus building the result is about 1.8 ms / 21 ms. These are differences of medians from separate probes, so treat them as estimates.
+- The C++ core alone is faster, but only by roughly 1.4-1.7x for compute. Most of that comes from validation (about 4.6x faster); the grouping, sums, sort and histogram part is roughly equal in both languages (derived estimate at 1,000,000 events: TypeScript 232 ms vs C++ 224 ms). The hand-written C++ is not tuned; this says nothing about what a tuned core could do.
+- Generation (not exposed natively through HTTP) is not a reliable comparison: TypeScript generation time depends on V8 heap/JIT history (10,000 events took 3.7 ms in a fresh process but 0.28 ms after a 100,000-event run; the 100,000-event case is bimodal). Native generation through the addon is slower because it builds JS objects.
+- Possible follow-ups that this benchmark could evaluate (none implemented or measured): reducing per-event boundary cost (for example columnar or typed-array input), and moving work off the main thread.
+- Limits: one machine, no CPU-frequency or background-load control, synthetic data from one generator, in-process loopback HTTP. Re-run `npm run bench:compare` on your hardware before drawing conclusions; do not quote these figures as general speedups.
 
 ## Known limitations
 
@@ -223,6 +264,7 @@ The benchmark first verifies each dataset against an independent naive oracle (s
 - [x] **Stage 1** – Synthetic event generator, analytics spec, TypeScript baseline, API endpoints with input validation, benchmark baseline.
 - [x] **Stage 2** – C++20 core + GoogleTest, CMake build, bit-exact parity tests against the TypeScript baseline (MSVC verified; GCC/Clang pending CI).
 - [x] **Stage 3** – Node-API addon exposing the core to the API (`engine: "native"`), differential tests against TypeScript, CI workflow for Windows and Ubuntu (Windows/MSVC verified locally; the workflow itself has not run yet).
+- [x] **Stage 3.1** – Reproducible TypeScript-vs-native benchmark (in-process, HTTP and direct-core levels, verified before timing).
 - [ ] **Stage 4** – WebAssembly build (Emscripten) and in-browser execution.
 - [ ] **Stage 5** – Reproducible benchmarks and comparison UI.
 - [ ] **Stage 6** – Dockerfile; confirm Linux (GCC/Clang) results from CI and harden the workflow.

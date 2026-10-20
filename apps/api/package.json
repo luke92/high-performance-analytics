@@ -13,7 +13,9 @@
     "fixtures:parity": "tsx scripts/export-parity-fixtures.ts",
     "native:build": "cmake-js build -d ../../cpp -O ../../cpp/build/addon -T hpa_addon --CDHPA_BUILD_ADDON=ON --CDHPA_BUILD_TESTS=OFF",
     "native:rebuild": "cmake-js rebuild -d ../../cpp -O ../../cpp/build/addon -T hpa_addon --CDHPA_BUILD_ADDON=ON --CDHPA_BUILD_TESTS=OFF",
-    "native:check": "tsx scripts/native-check.ts"
+    "native:check": "tsx scripts/native-check.ts",
+    "bench:core:build": "cmake -S ../../cpp -B ../../cpp/build/bench -DCMAKE_BUILD_TYPE=Release -DHPA_BUILD_BENCH=ON -DHPA_BUILD_TESTS=OFF && cmake --build ../../cpp/build/bench --config Release --target hpa_bench",
+    "bench:compare": "node --expose-gc --import tsx bench/compare.ts"
   },
   "dependencies": {
     "express": "^5.0.0"

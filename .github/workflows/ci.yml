@@ -78,3 +78,10 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
+
+      # Smoke test of the benchmark harness: exercises its equivalence checks on this platform.
+      # Timings are never asserted (shared CI runners are too noisy for that).
+      - name: Benchmark harness smoke test
+        run: |
+          npm run bench:core:build
+          npm run bench:compare -- --sizes=1000 --http-sizes=1000 --core-sizes=1000 --warmup=1 --runs=3 --http-warmup=1 --http-runs=3 --core-warmup=1 --core-runs=3 --out=bench-results/ci-smoke.json

@@ -114,5 +114,5 @@ Floating-point requirements: the core is compiled with `/fp:strict` (MSVC) or `-
 - **Types, not runtime checks.** C++ fields are typed, so "wrong JSON type" errors (a string where a number is expected, `null`, non-object event) cannot occur. Integers are `int64_t` so that every out-of-range *number* TypeScript rejects is also rejected here.
 - **Messages use the TypeScript field names** (`events[1].value`, `histogramBins`, `startTimestamp`), not the C++ member names, so the strings are identical.
 - **Absent values** are `std::optional<double>` instead of `null`.
-- **Timing:** nothing here is benchmarked or optimized yet; this stage is about correctness.
+- **Timing:** the core is not tuned. `bench/hpa_bench.cpp` (target `hpa_bench`, `npm run bench:core:build`, option `HPA_BUILD_BENCH`) times generate, validate and compute directly, without Node.js; `npm run bench:compare` combines it with the TypeScript and addon measurements. See the root README for methodology and results.
 - **Linux/GCC/Clang:** the code is written to be portable but has only been built and tested with MSVC so far.
