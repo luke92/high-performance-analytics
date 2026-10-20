@@ -69,8 +69,22 @@ jobs:
 
       - run: npm ci
 
-      - name: Build the native addon
-        run: npm run native:build
+      # cmake-js downloads Node's headers (and node.lib on Windows) from nodejs.org on first use.
+      - name: Cache cmake-js downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.cmake-js
+          key: cmake-js-${{ runner.os }}-node${{ matrix.node }}
+
+      - name: Build the native addon (retried: the first step downloads from nodejs.org)
+        shell: bash
+        run: |
+          for attempt in 1 2 3; do
+            npm run native:build && exit 0
+            echo "native:build failed (attempt $attempt of 3); retrying in 15s"
+            sleep 15
+          done
+          exit 1
 
       - name: Load the addon and compare it with TypeScript
         run: npm run native:check

@@ -37,7 +37,7 @@ Principles:
 | --- | --- | --- |
 | Node.js + npm | everything now | Node >= 22.12 (see `.nvmrc`) |
 | C++20 compiler + CMake >= 3.24 | the C++ core and its tests (Stage 2+) | MSVC (VS 2022 "Desktop development with C++"; verified), GCC or Clang (not yet verified) |
-| CMake on `PATH` + a C++ toolchain | building the Node-API addon (`npm run native:build`) | same as above; [cmake-js](https://github.com/cmake-js/cmake-js) drives the build and takes Node-API headers from the pinned npm package, so no Node headers are downloaded |
+| CMake on `PATH` + a C++ toolchain | building the Node-API addon (`npm run native:build`) | same as above; [cmake-js](https://github.com/cmake-js/cmake-js) drives the build. **It downloads Node's headers and (on Windows) `node.lib` from nodejs.org on first use** and caches them in `~/.cmake-js`, so the first build needs network access |
 | Emscripten SDK | Stage 4+ (not needed yet) | latest stable |
 
 ## Commands

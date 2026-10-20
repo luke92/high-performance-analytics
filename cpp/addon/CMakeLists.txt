@@ -56,7 +56,7 @@ set_target_properties(hpa_addon PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${HPA_ADDON_OUTPUT_DIR}")
 
 if(MSVC AND CMAKE_JS_NODELIB_DEF AND CMAKE_JS_NODELIB_TARGET)
-    # Generate node.lib from the pinned Node-API symbol list (no download needed).
+    # Generate node.lib from the symbol list supplied by cmake-js.
     execute_process(COMMAND ${CMAKE_AR} /def:${CMAKE_JS_NODELIB_DEF} /out:${CMAKE_JS_NODELIB_TARGET}
                             ${CMAKE_STATIC_LINKER_FLAGS})
 endif()
