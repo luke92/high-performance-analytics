@@ -99,3 +99,48 @@ jobs:
         run: |
           npm run bench:core:build
           npm run bench:compare -- --sizes=1000 --http-sizes=1000 --core-sizes=1000 --warmup=1 --runs=3 --http-warmup=1 --http-runs=3 --core-warmup=1 --core-runs=3 --out=bench-results/ci-smoke.json
+
+  # WebAssembly build of the core (Emscripten, version pinned in cpp/wasm/EMSCRIPTEN_VERSION): builds the
+  # module, runs the whole C++ core test suite inside WebAssembly, then the web workspace tests that load
+  # the module (parity with TypeScript, worker messaging, real worker thread).
+  wasm:
+    name: WebAssembly (Emscripten)
+    runs-on: ubuntu-latest
+    env:
+      # A missing or unloadable module must fail the suite, never skip it.
+      HPA_REQUIRE_WASM: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Read the pinned Emscripten version
+        id: emscripten
+        run: echo "version=$(cat cpp/wasm/EMSCRIPTEN_VERSION)" >> "$GITHUB_OUTPUT"
+
+      - uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: ${{ steps.emscripten.outputs.version }}
+          actions-cache-folder: emsdk-cache
+
+      - run: emcc --version
+
+      - name: Build the WebAssembly module
+        run: npm run wasm:build
+
+      - name: C++ core test suite inside WebAssembly
+        run: npm run wasm:test:cpp
+
+      - name: Web typecheck
+        run: npm run typecheck -w @hpa/web
+
+      - name: Web tests (parity, worker messaging, real worker thread)
+        run: npm test -w @hpa/web
+
+      - name: Production web build
+        run: npm run build -w @hpa/web

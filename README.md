@@ -8,7 +8,7 @@ A portfolio project demonstrating practical C++ integration in a web product. It
 2. **Native C++ engine** called from Node.js through Node-API (`node-addon-api`).
 3. **WebAssembly** build of the same portable C++ core, executed in the browser.
 
-> **Status: Stage 3 complete.** A deterministic TypeScript engine (the behavioral reference), a standalone C++20 core with bit-exact parity tests, and a Node-API addon that exposes the core to the Express API (`engine: "native"`) exist. The WebAssembly build does **not** exist yet. **A fair TypeScript-vs-native benchmark exists (see [Benchmark: TypeScript vs native](#benchmark-typescript-vs-native-c)); on the one machine measured, the native engine called through Node-API is currently *slower* than TypeScript, even though the C++ core alone is faster.** Windows/MSVC is the only verified platform; a GitHub Actions workflow for Windows and Ubuntu is in the repository but has not run yet.
+> **Status: Stage 4 complete.** A deterministic TypeScript engine (the behavioral reference), a standalone C++20 core with bit-exact parity tests, a Node-API addon that exposes the core to the Express API (`engine: "native"`), and a WebAssembly build of the same core that runs in a Web Worker (see [WebAssembly](#webassembly-stage-4)) exist. **A fair TypeScript-vs-native benchmark exists (see [Benchmark: TypeScript vs native](#benchmark-typescript-vs-native-c)); on the one machine measured, the native engine called through Node-API is currently *slower* than TypeScript, even though the C++ core alone is faster.** No WebAssembly benchmark exists, so no WebAssembly performance claim is made. The native C++ jobs have passed on GitHub Actions for Windows and Ubuntu; the new WebAssembly job has not run there yet. There is no dashboard UI yet.
 
 ## Architecture
 
@@ -22,7 +22,8 @@ apps/
 cpp/     core/  portable C++20 library (no Node/V8/browser/Emscripten dependencies)
          addon/ Node-API binding (node-addon-api) over hpa::core, built with cmake-js
          tests/ GoogleTest suite + parity fixture generated from the TypeScript engine
-         (planned) wasm/ Emscripten binding
+         wasm/  Emscripten binding of the same core (C ABI; no analytics logic) -> hpa_core.wasm
+apps/web/src/wasm/  WebAssembly wrapper, Web Worker, message protocol and client (no UI)
 ```
 
 Principles:
@@ -38,7 +39,7 @@ Principles:
 | Node.js + npm | everything now | Node >= 22.12 (see `.nvmrc`) |
 | C++20 compiler + CMake >= 3.24 | the C++ core and its tests (Stage 2+) | MSVC (VS 2022 "Desktop development with C++"; verified), GCC or Clang (not yet verified) |
 | CMake on `PATH` + a C++ toolchain | building the Node-API addon (`npm run native:build`) | same as above; [cmake-js](https://github.com/cmake-js/cmake-js) drives the build. **It downloads Node's headers and (on Windows) `node.lib` from nodejs.org on first use** and caches them in `~/.cmake-js`, so the first build needs network access |
-| Emscripten SDK | Stage 4+ (not needed yet) | latest stable |
+| Emscripten SDK | the WebAssembly module (`npm run wasm:build`, `npm run wasm:test:cpp`) | exactly 6.0.13 (`cpp/wasm/EMSCRIPTEN_VERSION`); also needs Ninja |
 
 ## Commands
 
@@ -289,6 +290,49 @@ Memory: the event objects occupy about 104 B/event on the V8 heap versus 28 B/ev
 - The cheaper-object-reader variant is 7-23% faster than production but still much slower than TypeScript, so on its own it does not change the picture.
 - Caveats: the columnar wire format is hypothetical (the API accepts only event objects); the whole-request TypeScript time is higher than parse + engine measured separately (about 119 ms vs 70 + 36 ms at 100,000 events) and I did not isolate why; 1,000,000 events exceeds the API limit and is in-process only; one machine, no control of CPU frequency or background load. Re-run `npm run bench:marshalling` before relying on any figure.
 
+## WebAssembly (Stage 4)
+
+The same `cpp/core` is compiled to WebAssembly with Emscripten and runs in a dedicated Web Worker, so heavy analytics never block the React UI. **There is no second implementation**: `cpp/wasm/` is a thin C binding (copy columns in, call the core, serialise the result) and contains no validation, generation, sorting, aggregation or histogram logic. The Node-API addon and the experimental marshalling code are unchanged and not used by the browser module. No dashboard or UI was added.
+
+**Prerequisite: Emscripten 6.0.13** (pinned in `cpp/wasm/EMSCRIPTEN_VERSION`; MSVC/GCC cannot build this target), plus CMake >= 3.24 and Ninja.
+
+```bash
+git clone https://github.com/emscripten-core/emsdk.git && cd emsdk
+./emsdk install 6.0.13 && ./emsdk activate 6.0.13
+source ./emsdk_env.sh            # Windows PowerShell: .\emsdk_env.ps1   (cmake and ninja must be on PATH too)
+
+npm run wasm:build               # -> apps/web/src/wasm/generated/hpa_core.{js,wasm} (git-ignored; ~63 kB, ~27 kB gzipped)
+npm run wasm:test:cpp            # the whole C++ core suite, compiled to WebAssembly and run under Node.js
+HPA_REQUIRE_WASM=1 npm test -w @hpa/web   # parity, worker messaging, real worker thread (skipped with a warning if not built)
+```
+
+`npm run wasm:build` also deletes `node_modules/.vitest-cache`: Vitest caches the result of `import.meta.glob` on disk, so a cache written while the module did not exist would keep reporting "not built" after you build it. It detects Emscripten first; if it is missing, not activated, or a different version, it prints the setup steps above and exits non-zero instead of pretending to build.
+
+**Interface** (`apps/web/src/wasm/`):
+
+```ts
+const client = createWasmAnalyticsClient();                         // worker + module load are lazy and asynchronous
+const { engine, result } = await client.computeEvents(events, { histogramBins: 10 });   // engine === "wasm"
+const { columns } = await client.generate({ seed: 42, count: 1000 });                   // seeded generator of the core
+```
+
+- **Input is columnar**, to avoid per-event boundary cost: five typed arrays (`ids`, `timestamps`, `values` as `Float64Array`; `eventTypeCodes`, `categoryCodes` as `Uint16Array`) plus two small string dictionaries. A whole dataset is copied into the WebAssembly heap in a few bulk `memcpy`-style copies and processed by **one** call. Typed-array views are copied by their `byteOffset`/`byteLength`, never the whole underlying buffer.
+- **C ABI** (`cpp/wasm/src/wasm_api.cpp`, version 1): `hpa_alloc/free`, `hpa_compute_columnar`, `hpa_generate`, `hpa_result_ptr/size` and the `hpa_generated_*` column getters. Results come back as JSON text with doubles printed with 17 significant digits (exact round trip, `-0` preserved).
+- **Worker protocol** (`protocol.ts`): `init | compute | generate` requests with an integer `requestId`; `ready | result | generated | error` responses that always carry `engine: "wasm"`. Error kinds: `init_failed`, `validation`, `limit`, `bad_request`, `internal`; the client adds `worker_unavailable`, `worker_error`, `timeout`, `terminated`, `protocol`. Validation messages are the TypeScript engine's, and arbitrary function names cannot be requested.
+- **Failures are reported, never hidden**: if the module cannot be loaded (missing file, bad ABI, compile error) every request fails with `init_failed` and the cause; if the worker crashes or stops answering, pending requests reject, the worker is discarded and a fresh one starts on the next request. **There is no fallback to another engine**, and every success names the engine that ran.
+- **Ownership**: `compute()` transfers the columns' ArrayBuffers to the worker (they become unusable in the caller) when a view covers its whole buffer; a view onto part of a larger buffer is copied first.
+- **Memory**: the heap starts at 32 MiB and can grow to 1 GiB. A call needs roughly 85 bytes per event inside WebAssembly (28 B copied columns, 48 B `hpa::Event` in wasm32, 8 B for the values the core sorts in place), plus the columns on the main thread (28 B) while in flight. The default limit is **1,000,000 events per call** (about 85 MiB in WebAssembly); above the core's own 5,000,000 the core's message is reported. The heap never shrinks. Results are small.
+
+**Correctness evidence** (what was actually run; Windows 10, Node 22.21 / emsdk's Node 24.19, Emscripten 6.0.13 / clang, `-O3`, `-ffp-contract=off -fno-fast-math`, WebAssembly has no fused multiply-add):
+
+- The C++ core test suite, **49 tests, passes compiled to WebAssembly**, including the bit-for-bit TypeScript parity fixtures (doubles compared by bit pattern, 100,000-event dataset, exact error messages). This is the basis for the bit-exact claim, and it holds for the WebAssembly engine of V8 (Node.js). Firefox and Safari engines were not tested.
+- 84 tests call the real module and compare with the TypeScript engine (`Object.is`, key order): the shared parity cases (6 generator, 25 compute datasets), 29 validation-error cases, floating-point edge cases (`-0` ordering, 0.1+0.2+0.3, extreme ids), percentile and histogram boundaries for many sizes and bin counts, error ordering, columnar layout checks, typed-array views with offsets surrounded by poison values, heap growth, and a leak check (heap flat over 100 calls).
+- 62 tests cover the worker: the handler (lazy single initialisation, sticky load failure, malformed requests, error mapping), the client against a loopback worker with real `structuredClone` transfer semantics (concurrency, out-of-order replies, crashes, timeouts, protocol violations), and a real `worker_threads` thread (real transfer, failure modes, and proof that the calling thread keeps running during a 400,000-event computation).
+- 10 deliberate mutations of the binding and wrapper (wrong column, ignored offsets, 15-digit output, leaking, ...) are all caught.
+- The module was also loaded in a **real browser worker** (Edge 155 / Chromium, headless, built with Vite in application mode) and returned the hand-verified results with `engine: "wasm"` and the TypeScript validation message. That check was manual and is not part of the test suite or CI.
+
+Vite does not recognise Emscripten's own `new URL("hpa_core.wasm", import.meta.url)`, so `loadModule.ts` resolves the `.wasm` URL with Vite's `?url` and passes it as `locateFile` in browsers/workers (Node.js, used by the tests, reads the file itself). Vite warns that `node:module` is externalised for the browser; that import sits behind Emscripten's Node.js check and is never reached in a browser. Not claimed: any performance figure (no WebAssembly benchmark exists yet), Firefox/Safari behaviour, or support for browsers without native WebAssembly exception handling.
+
 ## Known limitations
 
 - Reference implementation only: single-threaded, whole dataset in memory, no streaming.
@@ -301,7 +345,8 @@ Memory: the event objects occupy about 104 B/event on the V8 heap versus 28 B/ev
 - No UI for these endpoints yet.
 - The native engine runs synchronously on the Node.js main thread (no worker threads), like the TypeScript engine, and it validates and converts the whole request before computing. Conversion copies the events once; large requests therefore cost memory proportional to the dataset.
 - `/generate` always uses the TypeScript generator; engine selection exists for `/compute` only. The addon exposes `generateEvents` and it is tested, but it is not routed.
-- The addon is built for the installed Node.js with Node-API version 8 and the local platform/architecture only; there are no prebuilt binaries. Only Windows x64 / MSVC is verified.
+- The addon is built for the installed Node.js with Node-API version 8 and the local platform/architecture only; there are no prebuilt binaries. Verified locally on Windows x64 / MSVC and by GitHub Actions on Windows and Ubuntu.
+- WebAssembly: the input must be columnar (`packColumns` converts event objects, costing a pass on the main thread); default limit 1,000,000 events per call, one request at a time per worker, the heap never shrinks, a stuck computation can only be stopped by terminating the worker, and a load failure is sticky until a new worker is created. Verified on V8 (Node.js and one Chromium-based browser); Firefox and Safari were not tested. The WebAssembly CI job exists but has not run yet. Nothing in the app uses the WebAssembly client yet.
 
 ## Roadmap
 
@@ -311,7 +356,7 @@ Memory: the event objects occupy about 104 B/event on the V8 heap versus 28 B/ev
 - [x] **Stage 3** – Node-API addon exposing the core to the API (`engine: "native"`), differential tests against TypeScript, CI workflow for Windows and Ubuntu (Windows/MSVC verified locally; the workflow itself has not run yet).
 - [x] **Stage 3.1** – Reproducible TypeScript-vs-native benchmark (in-process, HTTP and direct-core levels, verified before timing).
 - [x] **Stage 3.2** – Marshalling experiment: columnar and optimised-object input in a separate experimental addon, benchmarked against production and TypeScript. Result: not adopted (see above).
-- [ ] **Stage 4** – WebAssembly build (Emscripten) and in-browser execution.
+- [x] **Stage 4** – WebAssembly build of the core (Emscripten 6.0.13), Web Worker with an explicit message protocol, parity and worker tests, WebAssembly CI job. Verified locally (core suite inside WebAssembly, 146 web tests, one manual real-browser run); the CI job has not run yet. No UI and no WebAssembly benchmark.
 - [ ] **Stage 5** – Reproducible benchmarks and comparison UI.
 - [ ] **Stage 6** – Dockerfile; confirm Linux (GCC/Clang) results from CI and harden the workflow.
 
