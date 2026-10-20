@@ -1,0 +1,80 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # The portable C++20 core and its GoogleTest suite. Independent of Node.js.
+  cpp-core:
+    name: C++ core (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    defaults:
+      run:
+        working-directory: cpp
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Windows (MSVC) - Release and Debug
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cmake --preset msvc -DHPA_WARNINGS_AS_ERRORS=ON
+          cmake --build --preset msvc-release
+          ctest --preset msvc-release
+          cmake --build --preset msvc-debug
+          ctest --preset msvc-debug
+
+      - name: Linux (GCC) - Release and Debug
+        if: runner.os == 'Linux'
+        run: |
+          cmake --preset linux
+          cmake --build --preset linux
+          ctest --preset linux
+          cmake --preset linux-debug
+          cmake --build --preset linux-debug
+          ctest --preset linux-debug
+
+  # TypeScript checks plus the Node-API addon, built and tested against the TypeScript reference.
+  node:
+    name: Node ${{ matrix.node }} + addon (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        node: [22, 24]
+    env:
+      # A missing or unloadable addon must fail the suite, never skip it.
+      HPA_REQUIRE_NATIVE: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - run: npm ci
+
+      - name: Build the native addon
+        run: npm run native:build
+
+      - name: Load the addon and compare it with TypeScript
+        run: npm run native:check
+
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build

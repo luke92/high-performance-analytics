@@ -11,8 +11,13 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 option(HPA_BUILD_TESTS "Build the GoogleTest suite" ON)
 option(HPA_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
+option(HPA_BUILD_ADDON "Build the Node-API addon (configured by cmake-js: npm run native:build)" OFF)
 
 add_subdirectory(core)
+
+if(HPA_BUILD_ADDON)
+    add_subdirectory(addon)
+endif()
 
 if(HPA_BUILD_TESTS)
     enable_testing()

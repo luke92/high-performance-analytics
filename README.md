@@ -8,7 +8,7 @@ A portfolio project demonstrating practical C++ integration in a web product. It
 2. **Native C++ engine** called from Node.js through Node-API (`node-addon-api`).
 3. **WebAssembly** build of the same portable C++ core, executed in the browser.
 
-> **Status: Stage 2 complete.** A deterministic TypeScript analytics engine (the behavioral reference), the API endpoints around it, a TypeScript-only benchmark baseline, and a standalone C++20 core with bit-exact parity tests exist. The Node-API addon and WebAssembly build do **not** exist yet, the C++ core has not been benchmarked, and no speedup is claimed.
+> **Status: Stage 3 complete.** A deterministic TypeScript engine (the behavioral reference), a standalone C++20 core with bit-exact parity tests, and a Node-API addon that exposes the core to the Express API (`engine: "native"`) exist. The WebAssembly build does **not** exist yet. **Nothing has been benchmarked against the native engine, so no speedup is claimed.** Windows/MSVC is the only verified platform; a GitHub Actions workflow for Windows and Ubuntu is in the repository but has not run yet.
 
 ## Architecture
 
@@ -18,9 +18,11 @@ apps/
          src/analytics/  framework-independent TypeScript reference engine (no Express imports)
          bench/          benchmark script
   web/   React + Vite + TypeScript. UI and visualization only.
+         src/native/     lazy addon loader + thin wrapper (no fallback to TypeScript)
 cpp/     core/  portable C++20 library (no Node/V8/browser/Emscripten dependencies)
+         addon/ Node-API binding (node-addon-api) over hpa::core, built with cmake-js
          tests/ GoogleTest suite + parity fixture generated from the TypeScript engine
-         (planned) addon/ Node-API binding, wasm/ Emscripten binding
+         (planned) wasm/ Emscripten binding
 ```
 
 Principles:
@@ -35,6 +37,7 @@ Principles:
 | --- | --- | --- |
 | Node.js + npm | everything now | Node >= 22.12 (see `.nvmrc`) |
 | C++20 compiler + CMake >= 3.24 | the C++ core and its tests (Stage 2+) | MSVC (VS 2022 "Desktop development with C++"; verified), GCC or Clang (not yet verified) |
+| CMake on `PATH` + a C++ toolchain | building the Node-API addon (`npm run native:build`) | same as above; [cmake-js](https://github.com/cmake-js/cmake-js) drives the build and takes Node-API headers from the pinned npm package, so no Node headers are downloaded |
 | Emscripten SDK | Stage 4+ (not needed yet) | latest stable |
 
 ## Commands
@@ -67,6 +70,17 @@ cmake --preset linux && cmake --build --preset linux && ctest --preset linux
 ```
 
 The first configure downloads GoogleTest 1.17.0 (pinned by SHA-256). Build output goes to the git-ignored `cpp/build/`. Details and parity guarantees: [`cpp/README.md`](cpp/README.md).
+
+### Native addon (from the repository root)
+
+```bash
+npm install
+npm run native:build     # cmake-js -> cpp/build/addon/lib/hpa_addon.node (Release)
+npm run native:check     # loads the addon, compares it with TypeScript on 1000 events
+npm run native:rebuild   # clean build
+```
+
+`cmake` must be on `PATH` (Windows: use a Developer PowerShell for VS 2022, or the CMake bundled with Visual Studio). The artifact path is the same on every platform and is git-ignored. Without a built addon the API still runs; `engine: "native"` then returns HTTP 503. See [`cpp/README.md`](cpp/README.md) for the architecture.
 
 **Parity workflow:** the TypeScript engine is the source of truth. `npm run fixtures:parity` writes `cpp/tests/fixtures/parity.txt` (generated events, analytics results, and validation error messages); the C++ tests compare every double by bit pattern. `npm test` fails if the committed fixture is stale.
 
@@ -141,6 +155,26 @@ curl -s -X POST http://localhost:3001/api/analytics/compute \
  "percentiles":{"p50":20,"p95":30,"p99":30}}
 ```
 
+### Engine selection
+
+`/compute` accepts an optional `engine` field: `"typescript"` (default) or `"native"` (the C++ core through the Node-API addon). The response **body is identical** for both engines; the engine that actually produced it is reported in the `X-Analytics-Engine` response header (absent on errors). There is no fallback: if the addon is not built or cannot be loaded, `engine: "native"` returns `503 {"error":"native_engine_unavailable"}`.
+
+```bash
+curl -si -X POST http://localhost:3001/api/analytics/compute -H "content-type: application/json"   -d '{"engine":"native","events":[{"id":1,"timestamp":1000,"eventType":"view","category":"books","value":10}]}'
+# HTTP/1.1 200 OK
+# X-Analytics-Engine: native
+# {"summary":{"count":1,"sum":10,"average":10,"min":10,"max":10},...}
+
+curl -s -X POST http://localhost:3001/api/analytics/compute -H "content-type: application/json" -d '{"engine":"gpu","events":[]}'
+# HTTP 400 {"error":"validation_error","message":"engine must be one of: typescript, native"}
+
+curl -s http://localhost:3001/api/analytics/engines
+# {"engines":{"typescript":{"available":true},"native":{"available":true,"coreVersion":"0.2.0","napiVersion":8}}}
+# when not built: "native":{"available":false,"reason":"not_built"}   (or "load_failed")
+```
+
+Validation errors are the same from both engines: same HTTP status, same message, and the same first-error ordering. The 100,000-event limit and the 16 MB body limit apply to both.
+
 Invalid request:
 
 ```bash
@@ -158,7 +192,16 @@ npm run bench -- --sizes=10000,100000 --runs=10 --warmup=3 --seed=7
 npm run bench -- --json       # machine-readable output including every sample
 ```
 
-The benchmark first verifies each dataset against an independent naive oracle (sort with comparator, linear bin assignment) and checks determinism; it aborts if anything differs, **before** recording timings. Timing uses `performance.now()` (monotonic) around `computeAnalytics` (which includes input validation) and `generateEvents`, after warm-up runs. It prints the Node/V8 version, OS, CPU, RAM, and min/median/max per size. Results are specific to the machine and are not committed; run it yourself. Only the TypeScript implementation exists, so no comparison is made.
+Native tests need the built addon. Without it they are **skipped with a visible warning**; set `HPA_REQUIRE_NATIVE=1` (CI does) to make a missing or unloadable addon a failure instead:
+
+```bash
+npm run native:build
+HPA_REQUIRE_NATIVE=1 npm test       # PowerShell: $env:HPA_REQUIRE_NATIVE = "1"; npm test
+```
+
+The native suite replays the parity cases and a table of malformed inputs through both engines and requires identical results (compared with `Object.is`, so `-0` differs from `0`, and with equal key order) or identical error messages.
+
+The benchmark first verifies each dataset against an independent naive oracle (sort with comparator, linear bin assignment) and checks determinism; it aborts if anything differs, **before** recording timings. Timing uses `performance.now()` (monotonic) around `computeAnalytics` (which includes input validation) and `generateEvents`, after warm-up runs. It prints the Node/V8 version, OS, CPU, RAM, and min/median/max per size. Results are specific to the machine and are not committed; run it yourself. The benchmark measures only the TypeScript engine; the native engine has **not** been benchmarked, so no comparison or speedup is claimed.
 
 ## Known limitations
 
@@ -170,16 +213,19 @@ The benchmark first verifies each dataset against an independent naive oracle (s
 - `timestamp` is validated but not used by any metric yet; `id` uniqueness is not checked.
 - No rate limiting or authentication (out of scope for the MVP).
 - No UI for these endpoints yet.
+- The native engine runs synchronously on the Node.js main thread (no worker threads), like the TypeScript engine, and it validates and converts the whole request before computing. Conversion copies the events once; large requests therefore cost memory proportional to the dataset.
+- `/generate` always uses the TypeScript generator; engine selection exists for `/compute` only. The addon exposes `generateEvents` and it is tested, but it is not routed.
+- The addon is built for the installed Node.js with Node-API version 8 and the local platform/architecture only; there are no prebuilt binaries. Only Windows x64 / MSVC is verified.
 
 ## Roadmap
 
 - [x] **Stage 0** – Monorepo scaffold, health endpoint, placeholder UI, tests.
 - [x] **Stage 1** – Synthetic event generator, analytics spec, TypeScript baseline, API endpoints with input validation, benchmark baseline.
 - [x] **Stage 2** – C++20 core + GoogleTest, CMake build, bit-exact parity tests against the TypeScript baseline (MSVC verified; GCC/Clang pending CI).
-- [ ] **Stage 3** – Node-API addon exposing the core to the API.
+- [x] **Stage 3** – Node-API addon exposing the core to the API (`engine: "native"`), differential tests against TypeScript, CI workflow for Windows and Ubuntu (Windows/MSVC verified locally; the workflow itself has not run yet).
 - [ ] **Stage 4** – WebAssembly build (Emscripten) and in-browser execution.
 - [ ] **Stage 5** – Reproducible benchmarks and comparison UI.
-- [ ] **Stage 6** – Dockerfile and GitHub Actions CI (Linux + Windows).
+- [ ] **Stage 6** – Dockerfile; confirm Linux (GCC/Clang) results from CI and harden the workflow.
 
 ## License
 

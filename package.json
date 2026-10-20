@@ -18,7 +18,10 @@
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
     "bench": "npm run bench -w @hpa/api --",
-    "fixtures:parity": "npm run fixtures:parity -w @hpa/api"
+    "fixtures:parity": "npm run fixtures:parity -w @hpa/api",
+    "native:build": "npm run native:build -w @hpa/api --",
+    "native:rebuild": "npm run native:rebuild -w @hpa/api --",
+    "native:check": "npm run native:check -w @hpa/api"
   },
   "devDependencies": {
     "npm-run-all2": "^8.0.0",

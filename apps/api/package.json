@@ -10,7 +10,10 @@
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run",
     "bench": "tsx bench/run.ts",
-    "fixtures:parity": "tsx scripts/export-parity-fixtures.ts"
+    "fixtures:parity": "tsx scripts/export-parity-fixtures.ts",
+    "native:build": "cmake-js build -d ../../cpp -O ../../cpp/build/addon -T hpa_addon --CDHPA_BUILD_ADDON=ON --CDHPA_BUILD_TESTS=OFF",
+    "native:rebuild": "cmake-js rebuild -d ../../cpp -O ../../cpp/build/addon -T hpa_addon --CDHPA_BUILD_ADDON=ON --CDHPA_BUILD_TESTS=OFF",
+    "native:check": "tsx scripts/native-check.ts"
   },
   "dependencies": {
     "express": "^5.0.0"
@@ -18,7 +21,14 @@
   "devDependencies": {
     "@types/express": "^5.0.0",
     "@types/node": "^22.0.0",
+    "cmake-js": "8.0.0",
+    "node-addon-api": "8.9.2",
     "tsx": "^4.0.0",
     "vitest": "^5.0.0"
+  },
+  "binary": {
+    "napi_versions": [
+      8
+    ]
   }
 }

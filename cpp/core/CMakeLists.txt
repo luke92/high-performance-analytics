@@ -10,6 +10,9 @@ target_include_directories(hpa_core PUBLIC
 
 target_compile_features(hpa_core PUBLIC cxx_std_20)
 
+# The static library is linked into a shared module (the Node-API addon), which needs PIC on Linux.
+set_target_properties(hpa_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
 # Bit-exact parity with the TypeScript reference requires strict IEEE 754
 # double arithmetic: no fast-math and no fused multiply-add contraction.
 # PRIVATE so the flags apply to the core's own translation units.

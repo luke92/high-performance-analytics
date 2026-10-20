@@ -8,11 +8,25 @@ import {
   type ComputeOptions,
   type GenerateOptions,
 } from "./analytics/index.js";
+import { getNativeStatus } from "./native/loader.js";
+import { nativeComputeAnalytics } from "./native/nativeEngine.js";
 
 /** Per-request event cap for both endpoints (the core itself allows more). */
 export const MAX_API_EVENTS = 100_000;
 /** ~100 bytes per event * MAX_API_EVENTS, with headroom. */
 export const COMPUTE_BODY_LIMIT = "16mb";
+
+/** Engines selectable on /compute. Closed list: clients never name functions or code. */
+export const ENGINES = ["typescript", "native"] as const;
+export type EngineName = (typeof ENGINES)[number];
+/** Response header naming the engine that actually produced the result. */
+export const ENGINE_HEADER = "X-Analytics-Engine";
+
+function parseEngine(value: unknown): EngineName {
+  if (value === undefined) return "typescript"; // the default is unchanged
+  if (typeof value === "string" && (ENGINES as readonly string[]).includes(value)) return value as EngineName;
+  throw new ValidationError(`engine must be one of: ${ENGINES.join(", ")}`);
+}
 
 export class PayloadTooLargeError extends Error {
   override readonly name = "PayloadTooLargeError";
@@ -46,7 +60,8 @@ export function analyticsRouter(): Router {
 
   router.post("/compute", (req, res) => {
     const body = requireObject(req.body);
-    rejectUnknownKeys(body, ["events", "histogramBins"]);
+    rejectUnknownKeys(body, ["events", "histogramBins", "engine"]);
+    const engine = parseEngine(body["engine"]);
     const { events } = body;
     if (Array.isArray(events) && events.length > MAX_API_EVENTS) {
       throw new PayloadTooLargeError(`events must contain at most ${MAX_API_EVENTS} items`);
@@ -55,8 +70,17 @@ export function analyticsRouter(): Router {
     if (body["histogramBins"] !== undefined) {
       options.histogramBins = body["histogramBins"] as number; // type-checked by the core
     }
-    // Untrusted input: computeAnalytics validates every event before use.
-    res.json(computeAnalytics(events as AnalyticsEvent[], options));
+    // Untrusted input: both engines validate every event before use. The header is set only
+    // after the chosen engine succeeded, so it can never claim an engine that did not run.
+    const result =
+      engine === "native"
+        ? nativeComputeAnalytics(events, options)
+        : computeAnalytics(events as AnalyticsEvent[], options);
+    res.set(ENGINE_HEADER, engine).json(result);
+  });
+
+  router.get("/engines", (_req, res) => {
+    res.json({ engines: { typescript: { available: true }, native: getNativeStatus() } });
   });
 
   return router;

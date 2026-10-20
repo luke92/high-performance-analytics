@@ -1,8 +1,8 @@
 # C++ analytics core
 
-A portable C++20 implementation of the analytics engine in `apps/api/src/analytics/`. **The TypeScript engine is the behavioral reference**: the C++ results must match it bit-for-bit, including error messages. There is no Node-API addon and no WebAssembly build yet (Stages 3 and 4).
+A portable C++20 implementation of the analytics engine in `apps/api/src/analytics/`. **The TypeScript engine is the behavioral reference**: the C++ results must match it bit-for-bit, including error messages. A thin Node-API addon (`addon/`) exposes it to Node.js; there is no WebAssembly build yet (Stage 4).
 
-The library has no dependencies beyond the C++ standard library. It includes nothing from Node.js, V8, Express, browsers or Emscripten. GoogleTest is fetched only for the tests.
+The core library has no dependencies beyond the C++ standard library. It includes nothing from Node.js, V8, Express, browsers or Emscripten. GoogleTest is fetched only for the tests; node-addon-api and Node-API headers are used only by `addon/`.
 
 ## Layout
 
@@ -16,6 +16,10 @@ cpp/
       limits.hpp  types.hpp  errors.hpp  prng.hpp
       validate.hpp  generate.hpp  compute.hpp
     src/                    validate.cpp  generate.cpp  compute.cpp
+  addon/
+    CMakeLists.txt          target hpa_addon (hpa_addon.node); only configured by cmake-js
+    src/addon.cpp           module registration, exception -> JS error translation
+    src/marshal.{hpp,cpp}   JS <-> hpa conversion (the whole boundary)
   tests/
     fixtures/parity.txt     GENERATED from the TypeScript engine (do not edit)
     fixture.{hpp,cpp}       parity.txt loader
@@ -52,12 +56,41 @@ ctest --preset msvc-debug
 **Linux (GCC or Clang, Ninja):**
 
 ```bash
-cmake --preset linux
-cmake --build --preset linux
-ctest --preset linux
+cmake --preset linux && cmake --build --preset linux && ctest --preset linux                       # Release
+cmake --preset linux-debug && cmake --build --preset linux-debug && ctest --preset linux-debug      # Debug
 ```
 
 For a clean build, delete `cpp/build/` first (it is git-ignored, as are all binaries). Useful options: `-DHPA_BUILD_TESTS=OFF` (library only), `-DHPA_WARNINGS_AS_ERRORS=ON` (for CI).
+
+## Node-API addon
+
+```bash
+# from the repository root; cmake must be on PATH
+npm install
+npm run native:build      # -> cpp/build/addon/lib/hpa_addon.node (same path on every platform/generator)
+npm run native:check      # load + compare with TypeScript
+```
+
+**Build approach.** `cmake-js` 8.0.0 and `node-addon-api` 8.9.2 are pinned (exact versions in `apps/api/package.json`, resolved in `package-lock.json`). cmake-js configures `cpp/CMakeLists.txt` with `-DHPA_BUILD_ADDON=ON -DHPA_BUILD_TESTS=OFF` in `cpp/build/addon/`, supplying Node-API headers from the pinned `node-api-headers` npm package (no download at build time) and, on Windows, generating `node.lib` from its symbol list. `cpp/addon/CMakeLists.txt` refuses to configure outside cmake-js and locates node-addon-api through `require.resolve`, so no absolute path is hard-coded. The addon links the existing `hpa::core` target (built with the same strict floating-point flags as for the tests) and compiles with `NAPI_VERSION=8` and C++ exceptions enabled. Nothing downloaded or compiled is committed (`cpp/build/` is git-ignored; cmake-js caches under the user's home directory).
+
+**Exports** (`require("hpa_addon.node")`):
+
+| Export | Notes |
+| --- | --- |
+| `generateEvents(options)` | `{ seed, count, startTimestamp?, intervalMs? }` -> events with the TypeScript key order |
+| `computeAnalytics(events, options?)` | `options = { histogramBins? }` -> result with the TypeScript shape and key order; absent values are `null` |
+| `coreVersion`, `napiVersion` | from CMake's project version and `NAPI_VERSION` |
+
+Application code should not call the addon directly: `apps/api/src/native/` loads it lazily, maps errors, and never falls back to TypeScript.
+
+**Boundary rules** (`marshal.cpp`):
+
+- Arrays and objects are converted to `std::vector<hpa::Event>` once. Integers must be integral JS numbers that fit `int64_t`; fractional, non-finite and out-of-range values are never truncated or cast silently.
+- The array length is checked before any element is read. Exceptions raised by JS getters propagate unchanged.
+- Validation is **not** re-implemented. When a field has the wrong JS type it is replaced with a sentinel the core rejects (for example `id = -1`, `value = NaN`, `eventType = ""`), so the core itself throws the exact TypeScript message, in TypeScript's field order. A few messages that only exist at the boundary (`events must be an array`, `events[i] must be an object`, `options must be an object`) are produced in `marshal.cpp`, and tests compare every one against the TypeScript engine.
+- Errors thrown to JS are `Error` objects with `code`: `HPA_VALIDATION_ERROR` (invalid input; the API turns it into the shared `ValidationError` and HTTP 400) or `HPA_INTERNAL_ERROR`.
+
+Limitations: calls are synchronous and run on the main thread; the addon is built per Node.js install (Node-API makes it ABI-stable across Node versions, but the binary is platform and architecture specific); only Windows x64 / MSVC has been verified.
 
 ## Parity with TypeScript
 

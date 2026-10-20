@@ -22,6 +22,7 @@ import {
   generateEvents,
   type AnalyticsEvent,
   type AnalyticsResult,
+  type ComputeOptions,
   type GenerateOptions,
 } from "../src/analytics/index.js";
 
@@ -65,7 +66,7 @@ const SMALL: AnalyticsEvent[] = [
 const values = (vs: number[], category = "a", eventType = "x") => vs.map((v, i) => ev(i + 1, category, eventType, v));
 const sequence = (n: number) => values(Array.from({ length: n }, (_, i) => i + 1), "books", "view");
 
-const GENERATE_CASES: Array<[string, Required<GenerateOptions>]> = [
+export const GENERATE_CASES: Array<[string, Required<GenerateOptions>]> = [
   ["seed42_n3", gen(42, 3)],
   ["seed0_n2", gen(0, 2)],
   ["seed123_n2000_start5000_interval7", gen(123, 2000, 5000, 7)],
@@ -74,7 +75,7 @@ const GENERATE_CASES: Array<[string, Required<GenerateOptions>]> = [
   ["seed9_n100", gen(9, 100)],
 ];
 
-const COMPUTE_INLINE: Array<[string, AnalyticsEvent[], number]> = [
+export const COMPUTE_INLINE: Array<[string, AnalyticsEvent[], number]> = [
   ["small_5bins", SMALL, 5],
   ["small_2bins", SMALL, 2],
   ["small_default_bins", SMALL, 10],
@@ -103,21 +104,28 @@ const COMPUTE_INLINE: Array<[string, AnalyticsEvent[], number]> = [
   ],
 ];
 
-const COMPUTE_GENERATED: Array<[string, Required<GenerateOptions>, number]> = [
+export const COMPUTE_GENERATED: Array<[string, Required<GenerateOptions>, number]> = [
   ["generated_seed42_n1000", gen(42, 1000), 10],
   ["generated_seed7_n100000_64bins", gen(7, 100_000), 64],
   ["generated_seed123_n2000", gen(123, 2000, 5000, 7), 10],
   ["generated_empty", gen(0, 0), 10],
 ];
 
-type Thunk = () => unknown;
+/** The two operations every engine (TypeScript, native addon) exposes. */
+export interface EngineApi {
+  generateEvents(options: GenerateOptions): unknown;
+  computeAnalytics(events: AnalyticsEvent[], options?: ComputeOptions): unknown;
+}
+export const TS_ENGINE: EngineApi = { generateEvents, computeAnalytics };
+
+type Thunk = (api: EngineApi) => unknown;
 const good = ev(1, "a", "x", 1);
-const withEvent = (patch: Partial<Record<keyof AnalyticsEvent, unknown>>): Thunk => () =>
-  computeAnalytics([{ ...good, ...patch } as AnalyticsEvent]);
-const withOptions = (o: Record<string, unknown>): Thunk => () => generateEvents(o as unknown as GenerateOptions);
+const withEvent = (patch: Partial<Record<keyof AnalyticsEvent, unknown>>): Thunk => (api) =>
+  api.computeAnalytics([{ ...good, ...patch } as AnalyticsEvent]);
+const withOptions = (o: Record<string, unknown>): Thunk => (api) => api.generateEvents(o as unknown as GenerateOptions);
 
 /** Names must match the table in cpp/tests/test_validation.cpp. */
-const ERROR_CASES: Array<[string, Thunk]> = [
+export const ERROR_CASES: Array<[string, Thunk]> = [
   ["generate_seed_negative", withOptions({ seed: -1, count: 1 })],
   ["generate_seed_too_large", withOptions({ seed: 4_294_967_296, count: 1 })],
   ["generate_count_negative", withOptions({ seed: 1, count: -1 })],
@@ -145,11 +153,11 @@ const ERROR_CASES: Array<[string, Thunk]> = [
   ["event_value_neg_infinity", withEvent({ value: -Infinity })],
   ["event_value_over_limit", withEvent({ value: 1e12 + 1 })],
   ["event_first_error_wins", withEvent({ id: -1, value: NaN })],
-  ["event_index_in_message", () => computeAnalytics([good, { ...good, value: NaN }])],
-  ["bins_zero", () => computeAnalytics([good], { histogramBins: 0 })],
-  ["bins_negative", () => computeAnalytics([good], { histogramBins: -1 })],
-  ["bins_too_large", () => computeAnalytics([good], { histogramBins: 1025 })],
-  ["events_checked_before_bins", () => computeAnalytics([{ ...good, value: NaN }], { histogramBins: 0 })],
+  ["event_index_in_message", (api) => api.computeAnalytics([good, { ...good, value: NaN }])],
+  ["bins_zero", (api) => api.computeAnalytics([good], { histogramBins: 0 })],
+  ["bins_negative", (api) => api.computeAnalytics([good], { histogramBins: -1 })],
+  ["bins_too_large", (api) => api.computeAnalytics([good], { histogramBins: 1025 })],
+  ["events_checked_before_bins", (api) => api.computeAnalytics([{ ...good, value: NaN }], { histogramBins: 0 })],
 ];
 
 export function buildParityFixture(): string {
@@ -170,7 +178,7 @@ export function buildParityFixture(): string {
   for (const [name, run] of ERROR_CASES) {
     let message: string | undefined;
     try {
-      run();
+      run(TS_ENGINE);
     } catch (err) {
       message = (err as Error).message;
     }

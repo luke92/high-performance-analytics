@@ -1,5 +1,6 @@
 import express, { type Express, type NextFunction, type Request, type Response } from "express";
 import { ValidationError } from "./analytics/index.js";
+import { NativeUnavailableError } from "./native/loader.js";
 import { analyticsRouter, COMPUTE_BODY_LIMIT, PayloadTooLargeError } from "./analyticsRoutes.js";
 
 export interface HealthResponse {
@@ -28,6 +29,10 @@ export function createApp(): Express {
   app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
     if (err instanceof ValidationError) {
       res.status(400).json({ error: "validation_error", message: err.message });
+      return;
+    }
+    if (err instanceof NativeUnavailableError) {
+      res.status(503).json({ error: "native_engine_unavailable", message: err.message });
       return;
     }
     if (err instanceof PayloadTooLargeError) {
