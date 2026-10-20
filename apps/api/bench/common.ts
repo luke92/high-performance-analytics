@@ -1,5 +1,7 @@
 /** Helpers shared by the benchmark scripts (run.ts, compare.ts). Not used by any request path. */
 import { execFileSync } from "node:child_process";
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import os from "node:os";
 import { performance } from "node:perf_hooks";
 import { computeAnalytics, type AnalyticsEvent, type AnalyticsResult } from "../src/analytics/index.js";
@@ -22,6 +24,20 @@ export function baseEnvironment() {
     logicalCpus: os.cpus().length,
     totalMemoryGiB: Math.round((os.totalmem() / 2 ** 30) * 10) / 10,
   };
+}
+
+/** Reads compiler id/version from a CMake build directory's generated compiler info (best effort). */
+export function cmakeCompilerInfo(buildDir: string): { compiler: string; version: string } {
+  try {
+    const cmakeFiles = join(buildDir, "CMakeFiles");
+    const dir = readdirSync(cmakeFiles).find((d) => /^\d+\.\d+/.test(d));
+    const text = readFileSync(join(cmakeFiles, dir ?? "", "CMakeCXXCompiler.cmake"), "utf8");
+    const id = /set\(CMAKE_CXX_COMPILER_ID "([^"]*)"\)/.exec(text)?.[1] ?? "unknown";
+    const version = /set\(CMAKE_CXX_COMPILER_VERSION "([^"]*)"\)/.exec(text)?.[1] ?? "unknown";
+    return { compiler: id, version };
+  } catch {
+    return { compiler: "unknown", version: "unknown" };
+  }
 }
 
 /** Best-effort commit id and whether the working tree had uncommitted changes. */

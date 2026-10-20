@@ -24,7 +24,7 @@
  * any mismatch aborts the run without writing a report. Progress goes to stderr.
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { dirname, resolve } from "node:path";
 import { performance } from "node:perf_hooks";
@@ -33,7 +33,7 @@ import { computeAnalytics, generateEvents, ValidationError, validateEvents } fro
 import { createApp } from "../src/app.js";
 import { getNativeStatus } from "../src/native/loader.js";
 import { nativeComputeAnalytics, nativeGenerateEvents } from "../src/native/nativeEngine.js";
-import { baseEnvironment, compare, firstDifference, gitInfo, summarize, time, verify, type Comparison, type Summary } from "./common.js";
+import { baseEnvironment, cmakeCompilerInfo, compare, firstDifference, gitInfo, summarize, time, verify, type Comparison, type Summary } from "./common.js";
 
 // ---- Arguments ------------------------------------------------------------------------------
 
@@ -131,20 +131,6 @@ const log = (msg: string) => process.stderr.write(`${msg}\n`);
 // ---- Environment ----------------------------------------------------------------------------
 
 const repoRoot = fileURLToPath(new URL("../../../", import.meta.url));
-
-/** Reads compiler id/version from a CMake build directory's generated compiler info (best effort). */
-function cmakeCompilerInfo(buildDir: string): { compiler: string; version: string } {
-  try {
-    const cmakeFiles = resolve(buildDir, "CMakeFiles");
-    const dir = readdirSync(cmakeFiles).find((d) => /^\d+\.\d+/.test(d));
-    const text = readFileSync(resolve(cmakeFiles, dir ?? "", "CMakeCXXCompiler.cmake"), "utf8");
-    const id = /set\(CMAKE_CXX_COMPILER_ID "([^"]*)"\)/.exec(text)?.[1] ?? "unknown";
-    const version = /set\(CMAKE_CXX_COMPILER_VERSION "([^"]*)"\)/.exec(text)?.[1] ?? "unknown";
-    return { compiler: id, version };
-  } catch {
-    return { compiler: "unknown", version: "unknown" };
-  }
-}
 
 function addonBuildInfo() {
   const buildDir = resolve(repoRoot, "cpp/build/addon");
