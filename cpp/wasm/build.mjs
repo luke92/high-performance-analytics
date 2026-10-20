@@ -46,6 +46,14 @@ function run(command, args, options = {}) {
   return result;
 }
 
+/**
+ * Arguments are passed through cmd.exe on Windows (needed for .bat shims such as emcmake), where a value
+ * with a space must be quoted. Elsewhere there is no shell and quotes would become part of the value.
+ */
+function shellArg(value) {
+  return isWindows ? `"${value}"` : value;
+}
+
 function onPath(name) {
   const probe = run(isWindows ? "where" : "which", [name]);
   return probe.status === 0;
@@ -88,14 +96,14 @@ if (cppTests) {
   // Runs every core test (including the bit-exact TypeScript parity fixtures) inside WebAssembly.
   // The Emscripten toolchain sets CMAKE_CROSSCOMPILING_EMULATOR to Node.js, so ctest executes the .js output.
   const testDir = "cpp/build/wasm-tests";
-  if (emcmake(["-S", "cpp", "-B", testDir, "-G", `"${generator}"`, "-DCMAKE_BUILD_TYPE=Release", "-DHPA_BUILD_TESTS=ON"]).status !== 0) fail("emcmake configure failed");
+  if (emcmake(["-S", "cpp", "-B", testDir, "-G", shellArg(generator), "-DCMAKE_BUILD_TYPE=Release", "-DHPA_BUILD_TESTS=ON"]).status !== 0) fail("emcmake configure failed");
   if (run("cmake", ["--build", testDir], common).status !== 0) fail("cmake --build failed");
   const tests = run("ctest", ["--test-dir", testDir, "--output-on-failure"], common);
   if (tests.status !== 0) fail("the C++ tests failed under WebAssembly");
   process.exit(0);
 }
 
-if (emcmake(["-S", "cpp", "-B", "cpp/build/wasm", "-G", `"${generator}"`, "-DCMAKE_BUILD_TYPE=Release", "-DHPA_BUILD_WASM=ON", "-DHPA_BUILD_TESTS=OFF"]).status !== 0) {
+if (emcmake(["-S", "cpp", "-B", "cpp/build/wasm", "-G", shellArg(generator), "-DCMAKE_BUILD_TYPE=Release", "-DHPA_BUILD_WASM=ON", "-DHPA_BUILD_TESTS=OFF"]).status !== 0) {
   fail("emcmake configure failed");
 }
 if (run("cmake", ["--build", "cpp/build/wasm"], common).status !== 0) fail("cmake --build failed");
