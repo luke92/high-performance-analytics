@@ -244,6 +244,51 @@ npm run bench:compare -- --sizes=10000 --runs=30 --skip-http --json   # options:
 - Possible follow-ups that this benchmark could evaluate (none implemented or measured): reducing per-event boundary cost (for example columnar or typed-array input), and moving work off the main thread.
 - Limits: one machine, no CPU-frequency or background-load control, synthetic data from one generator, in-process loopback HTTP. Re-run `npm run bench:compare` on your hardware before drawing conclusions; do not quote these figures as general speedups.
 
+## Marshalling experiment (Stage 3.2)
+
+The benchmark above showed that converting JS event objects to C++ is most of the native engine's cost. This experiment asks whether a cheaper input representation changes the conclusion. **The production code was not changed**: the experiment lives in a separate addon (`cpp/addon/experimental/`, never loaded by the API) and in `apps/api/bench/`.
+
+```bash
+npm run native:build                 # production addon (the baseline)
+npm run native:experimental:build    # experimental addon -> cpp/build/addon-experimental/lib/
+npm run bench:marshalling -- --sizes=10000,100000,1000000   # ~8 minutes with 1M; writes bench-results/marshalling-*.json
+HPA_REQUIRE_EXPERIMENTAL=1 npm test  # without that variable the 167 experimental tests are skipped with a warning
+```
+
+**Where the production cost comes from** (`cpp/addon/src/marshal.cpp`): about 23 Node-API calls per event (`get_element`, `typeof` + `is_array`, five `get_property`, repeated `typeof` checks, `get_value_double` x3, two UTF-8 reads per string that each call twice), roughly 7 handles per event that are only released when the whole array has been read, and two `std::string` copies per event. Measured, that is about 1.1 µs per event.
+
+**Alternatives** (all use the unchanged `hpa::core`, the same result writer, and the same validation, so error messages and ordering match the object API; 167 parity, error and boundary tests plus mutation checks guard that):
+
+- *objects*: same object input, but one `HandleScope` per event and one call per field (strings read once into a stack buffer).
+- *columnar*: `Float64Array` for id, timestamp and value, `Uint16Array` codes plus small string dictionaries for category and eventType. No Node-API call per event. Length checks, wrong column types and out-of-range codes are validated; the core still validates every value.
+
+**Results** (medians, ms; one machine; each size in a fresh process; every variant verified identical to TypeScript before timing):
+
+| 100,000 events | TypeScript | native: production | native: objects | native: columnar, columns already built | native: columnar, packed from objects |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Engine call | 36.0 | 131.6 | 119.2 | 31.5 | 37.1 (pack: 7.6) |
+| of which convert + validate | - | 109.8 | 99.5 | 10.5 | 10.5 (+ pack) |
+| vs TypeScript | | 3.7x slower | 3.3x slower | 1.14x faster | inconclusive (0.97) |
+
+Other sizes: engine call with columns already built is 1.07x faster than TypeScript at 10,000 events and 1.10x at 1,000,000 (in-process only); packing from objects makes it 0.92x (slower) at 10,000 and inconclusive at 100,000 and 1,000,000. The *objects* variant is 1.07x / 1.10x / 1.23x faster than production at 10,000 / 100,000 / 1,000,000 events but remains about 3.3x slower than TypeScript. Convert + validate is about 10x cheaper with columns at every size.
+
+**Whole-request view** (`JSON.parse(body)` → engine → `JSON.stringify(result)`, no HTTP server, includes every conversion):
+
+| Events | TypeScript | production native | columnar from objects | TypeScript on the *same columnar body* | native on the columnar body |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 10,000 | 10.65 | 19.77 (1.9x slower) | 10.99 (inconclusive) | 5.84 | 5.47 (1.07x faster than TS on the same body) |
+| 100,000 | 119.1 | 229.9 (1.9x slower) | 107.9 (1.10x faster) | 67.29 | 60.68 (1.11x faster) |
+| 1,000,000 | 1587.7 | 2924 (1.8x slower) | 1276.9 (1.24x faster) | 691.6 | 603.7 (1.15x faster) |
+
+Memory: the event objects occupy about 104 B/event on the V8 heap versus 28 B/event for the columns (3.7x less); every native variant additionally builds a transient `std::vector<hpa::Event>` of 88 B/event for the core, which the columnar layout does not avoid (the core API takes that vector).
+
+**Conclusion: the experiment does not justify a production change, and the simpler object-based design is kept.**
+
+- The columnar layout does make the conversion about 10x cheaper, which removes the overhead. But the best case (columns already built) is only 1.07-1.14x faster than TypeScript, and packing the objects that the API actually receives costs about as much as it saves.
+- The large end-to-end gains for a columnar *request body* (about 2x) come mostly from `JSON.parse` being cheaper on arrays of numbers (26 ms vs 65 ms at 100,000 events), a saving the TypeScript engine would also get. With the same columnar body, native is only 1.07-1.15x faster than TypeScript. A columnar wire format may still be worth having for its smaller bodies (3.2x) and faster parsing, but that is a product/API decision, not a reason to use C++.
+- The cheaper-object-reader variant is 7-23% faster than production but still much slower than TypeScript, so on its own it does not change the picture.
+- Caveats: the columnar wire format is hypothetical (the API accepts only event objects); the whole-request TypeScript time is higher than parse + engine measured separately (about 119 ms vs 70 + 36 ms at 100,000 events) and I did not isolate why; 1,000,000 events exceeds the API limit and is in-process only; one machine, no control of CPU frequency or background load. Re-run `npm run bench:marshalling` before relying on any figure.
+
 ## Known limitations
 
 - Reference implementation only: single-threaded, whole dataset in memory, no streaming.
@@ -265,6 +310,7 @@ npm run bench:compare -- --sizes=10000 --runs=30 --skip-http --json   # options:
 - [x] **Stage 2** – C++20 core + GoogleTest, CMake build, bit-exact parity tests against the TypeScript baseline (MSVC verified; GCC/Clang pending CI).
 - [x] **Stage 3** – Node-API addon exposing the core to the API (`engine: "native"`), differential tests against TypeScript, CI workflow for Windows and Ubuntu (Windows/MSVC verified locally; the workflow itself has not run yet).
 - [x] **Stage 3.1** – Reproducible TypeScript-vs-native benchmark (in-process, HTTP and direct-core levels, verified before timing).
+- [x] **Stage 3.2** – Marshalling experiment: columnar and optimised-object input in a separate experimental addon, benchmarked against production and TypeScript. Result: not adopted (see above).
 - [ ] **Stage 4** – WebAssembly build (Emscripten) and in-browser execution.
 - [ ] **Stage 5** – Reproducible benchmarks and comparison UI.
 - [ ] **Stage 6** – Dockerfile; confirm Linux (GCC/Clang) results from CI and harden the workflow.

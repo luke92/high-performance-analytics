@@ -90,6 +90,8 @@ Application code should not call the addon directly: `apps/api/src/native/` load
 - Validation is **not** re-implemented. When a field has the wrong JS type it is replaced with a sentinel the core rejects (for example `id = -1`, `value = NaN`, `eventType = ""`), so the core itself throws the exact TypeScript message, in TypeScript's field order. A few messages that only exist at the boundary (`events must be an array`, `events[i] must be an object`, `options must be an object`) are produced in `marshal.cpp`, and tests compare every one against the TypeScript engine.
 - Errors thrown to JS are `Error` objects with `code`: `HPA_VALIDATION_ERROR` (invalid input; the API turns it into the shared `ValidationError` and HTTP 400) or `HPA_INTERNAL_ERROR`.
 
+**Experimental addon.** `addon/experimental/` builds a second, separate module (`npm run native:experimental:build`, output `cpp/build/addon-experimental/lib/hpa_addon_experimental.node`) with alternative input representations (columnar typed arrays; a cheaper object reader). It reuses `src/marshal.cpp`'s result writer and the unchanged core, is never loaded by the API, and exists only for the benchmark in `apps/api/bench/marshalling.ts`. See the root README for the results and why production keeps the object API.
+
 Limitations: calls are synchronous and run on the main thread; the addon is built per Node.js install (Node-API makes it ABI-stable across Node versions, but the binary is platform and architecture specific); only Windows x64 / MSVC has been verified.
 
 ## Parity with TypeScript

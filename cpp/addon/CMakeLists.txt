@@ -1,6 +1,6 @@
-# Node-API binding over hpa::core. Build it through cmake-js (`npm run native:build`
-# from the repository root): cmake-js supplies CMAKE_JS_INC / CMAKE_JS_LIB / CMAKE_JS_SRC
-# (Node-API headers come from the pinned npm package node-api-headers).
+# Node-API binding over hpa::core. Build it through cmake-js (`npm run native:build` from the
+# repository root): cmake-js supplies CMAKE_JS_INC / CMAKE_JS_LIB / CMAKE_JS_SRC. It downloads the
+# Node.js headers (and node.lib on Windows) for the running Node version on first use.
 if(NOT CMAKE_JS_INC)
     message(FATAL_ERROR
         "The Node-API addon must be configured by cmake-js. Run `npm run native:build` from the "
@@ -21,39 +21,48 @@ if(NOT HPA_NODE_ADDON_API_DIR)
     endif()
 endif()
 
-add_library(hpa_addon SHARED
-    src/addon.cpp
-    src/marshal.cpp
-    ${CMAKE_JS_SRC})
-
-set_target_properties(hpa_addon PROPERTIES PREFIX "" SUFFIX ".node")
-
-target_include_directories(hpa_addon SYSTEM PRIVATE ${CMAKE_JS_INC} "${HPA_NODE_ADDON_API_DIR}")
-target_link_libraries(hpa_addon PRIVATE hpa::core ${CMAKE_JS_LIB})
-
-target_compile_definitions(hpa_addon PRIVATE
-    NAPI_VERSION=8
-    NAPI_CPP_EXCEPTIONS
-    HPA_CORE_VERSION="${PROJECT_VERSION}")
-
-if(MSVC)
-    target_compile_options(hpa_addon PRIVATE /W4 /permissive- /utf-8 /EHsc)
-    if(HPA_WARNINGS_AS_ERRORS)
-        target_compile_options(hpa_addon PRIVATE /WX)
-    endif()
-else()
-    target_compile_options(hpa_addon PRIVATE -Wall -Wextra -Wpedantic -fexceptions)
-    if(HPA_WARNINGS_AS_ERRORS)
-        target_compile_options(hpa_addon PRIVATE -Werror)
-    endif()
-endif()
-
-# One fixed output location on every platform/generator: <build dir>/lib/hpa_addon.node.
+# One fixed output location on every platform/generator: <build dir>/lib/<target>.node.
 # The empty generator expression stops multi-config generators from appending Debug/Release.
 set(HPA_ADDON_OUTPUT_DIR "${CMAKE_BINARY_DIR}/lib$<0:>")
-set_target_properties(hpa_addon PROPERTIES
-    LIBRARY_OUTPUT_DIRECTORY "${HPA_ADDON_OUTPUT_DIR}"
-    RUNTIME_OUTPUT_DIRECTORY "${HPA_ADDON_OUTPUT_DIR}")
+
+# Declares a Node-API module linked against hpa::core with the project's settings.
+function(hpa_add_napi_module target)
+    add_library(${target} SHARED ${ARGN} ${CMAKE_JS_SRC})
+
+    set_target_properties(${target} PROPERTIES
+        PREFIX "" SUFFIX ".node"
+        LIBRARY_OUTPUT_DIRECTORY "${HPA_ADDON_OUTPUT_DIR}"
+        RUNTIME_OUTPUT_DIRECTORY "${HPA_ADDON_OUTPUT_DIR}")
+
+    target_include_directories(${target} SYSTEM PRIVATE ${CMAKE_JS_INC} "${HPA_NODE_ADDON_API_DIR}")
+    target_include_directories(${target} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    target_link_libraries(${target} PRIVATE hpa::core ${CMAKE_JS_LIB})
+
+    target_compile_definitions(${target} PRIVATE
+        NAPI_VERSION=8
+        NAPI_CPP_EXCEPTIONS
+        HPA_CORE_VERSION="${PROJECT_VERSION}")
+
+    if(MSVC)
+        target_compile_options(${target} PRIVATE /W4 /permissive- /utf-8 /EHsc)
+        if(HPA_WARNINGS_AS_ERRORS)
+            target_compile_options(${target} PRIVATE /WX)
+        endif()
+    else()
+        target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic -fexceptions)
+        if(HPA_WARNINGS_AS_ERRORS)
+            target_compile_options(${target} PRIVATE -Werror)
+        endif()
+    endif()
+endfunction()
+
+hpa_add_napi_module(hpa_addon src/addon.cpp src/marshal.cpp)
+
+# Experimental marshalling alternatives, benchmarked in apps/api/bench/marshalling.ts.
+# Never loaded by the API. Build with `npm run native:experimental:build`.
+if(HPA_BUILD_EXPERIMENTAL_ADDON)
+    hpa_add_napi_module(hpa_addon_experimental experimental/experimental.cpp src/marshal.cpp)
+endif()
 
 if(MSVC AND CMAKE_JS_NODELIB_DEF AND CMAKE_JS_NODELIB_TARGET)
     # Generate node.lib from the symbol list supplied by cmake-js.
