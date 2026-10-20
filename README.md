@@ -8,7 +8,7 @@ A portfolio project demonstrating practical C++ integration in a web product. It
 2. **Native C++ engine** called from Node.js through Node-API (`node-addon-api`).
 3. **WebAssembly** build of the same portable C++ core, executed in the browser.
 
-> **Status: Stage 4 complete.** A deterministic TypeScript engine (the behavioral reference), a standalone C++20 core with bit-exact parity tests, a Node-API addon that exposes the core to the Express API (`engine: "native"`), and a WebAssembly build of the same core that runs in a Web Worker (see [WebAssembly](#webassembly-stage-4)) exist. **A fair TypeScript-vs-native benchmark exists (see [Benchmark: TypeScript vs native](#benchmark-typescript-vs-native-c)); on the one machine measured, the native engine called through Node-API is currently *slower* than TypeScript, even though the C++ core alone is faster.** No WebAssembly benchmark exists, so no WebAssembly performance claim is made. The native C++ jobs have passed on GitHub Actions for Windows and Ubuntu; the new WebAssembly job has not run there yet. There is no dashboard UI yet.
+> **Status: Stage 4 complete.** A deterministic TypeScript engine (the behavioral reference), a standalone C++20 core with bit-exact parity tests, a Node-API addon that exposes the core to the Express API (`engine: "native"`), and a WebAssembly build of the same core that runs in a Web Worker (see [WebAssembly](#webassembly-stage-4)) exist. **A fair TypeScript-vs-native benchmark exists (see [Benchmark: TypeScript vs native](#benchmark-typescript-vs-native-c)); on the one machine measured, the native engine called through Node-API is currently *slower* than TypeScript, even though the C++ core alone is faster.** No WebAssembly benchmark exists, so no WebAssembly performance claim is made. GitHub Actions passes for the C++ core and the Node-API addon on Windows and Ubuntu (Node 22 and 24) and for the WebAssembly build on Ubuntu (Emscripten 6.0.13). There is no dashboard UI yet.
 
 ## Architecture
 
@@ -346,17 +346,17 @@ Vite does not recognise Emscripten's own `new URL("hpa_core.wasm", import.meta.u
 - The native engine runs synchronously on the Node.js main thread (no worker threads), like the TypeScript engine, and it validates and converts the whole request before computing. Conversion copies the events once; large requests therefore cost memory proportional to the dataset.
 - `/generate` always uses the TypeScript generator; engine selection exists for `/compute` only. The addon exposes `generateEvents` and it is tested, but it is not routed.
 - The addon is built for the installed Node.js with Node-API version 8 and the local platform/architecture only; there are no prebuilt binaries. Verified locally on Windows x64 / MSVC and by GitHub Actions on Windows and Ubuntu.
-- WebAssembly: the input must be columnar (`packColumns` converts event objects, costing a pass on the main thread); default limit 1,000,000 events per call, one request at a time per worker, the heap never shrinks, a stuck computation can only be stopped by terminating the worker, and a load failure is sticky until a new worker is created. Verified on V8 (Node.js and one Chromium-based browser); Firefox and Safari were not tested. The WebAssembly CI job exists but has not run yet. Nothing in the app uses the WebAssembly client yet.
+- WebAssembly: the input must be columnar (`packColumns` converts event objects, costing a pass on the main thread); default limit 1,000,000 events per call, one request at a time per worker, the heap never shrinks, a stuck computation can only be stopped by terminating the worker, and a load failure is sticky until a new worker is created. Verified on V8 (Node.js and one Chromium-based browser); Firefox and Safari were not tested. The WebAssembly CI job (Ubuntu) passes, but it runs under Node.js: the real-browser check was manual. Nothing in the app uses the WebAssembly client yet.
 
 ## Roadmap
 
 - [x] **Stage 0** – Monorepo scaffold, health endpoint, placeholder UI, tests.
 - [x] **Stage 1** – Synthetic event generator, analytics spec, TypeScript baseline, API endpoints with input validation, benchmark baseline.
 - [x] **Stage 2** – C++20 core + GoogleTest, CMake build, bit-exact parity tests against the TypeScript baseline (MSVC verified; GCC/Clang pending CI).
-- [x] **Stage 3** – Node-API addon exposing the core to the API (`engine: "native"`), differential tests against TypeScript, CI workflow for Windows and Ubuntu (Windows/MSVC verified locally; the workflow itself has not run yet).
+- [x] **Stage 3** – Node-API addon exposing the core to the API (`engine: "native"`), differential tests against TypeScript, CI workflow for Windows and Ubuntu (passing on GitHub Actions; MSVC also verified locally).
 - [x] **Stage 3.1** – Reproducible TypeScript-vs-native benchmark (in-process, HTTP and direct-core levels, verified before timing).
 - [x] **Stage 3.2** – Marshalling experiment: columnar and optimised-object input in a separate experimental addon, benchmarked against production and TypeScript. Result: not adopted (see above).
-- [x] **Stage 4** – WebAssembly build of the core (Emscripten 6.0.13), Web Worker with an explicit message protocol, parity and worker tests, WebAssembly CI job. Verified locally (core suite inside WebAssembly, 146 web tests, one manual real-browser run); the CI job has not run yet. No UI and no WebAssembly benchmark.
+- [x] **Stage 4** – WebAssembly build of the core (Emscripten 6.0.13), Web Worker with an explicit message protocol, parity and worker tests, WebAssembly CI job. Verified locally (core suite inside WebAssembly, 146 web tests, one manual real-browser run) and by the WebAssembly CI job on Ubuntu. No UI and no WebAssembly benchmark.
 - [ ] **Stage 5** – Reproducible benchmarks and comparison UI.
 - [ ] **Stage 6** – Dockerfile; confirm Linux (GCC/Clang) results from CI and harden the workflow.
 
