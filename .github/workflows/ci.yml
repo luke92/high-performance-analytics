@@ -76,7 +76,7 @@ jobs:
           path: ~/.cmake-js
           key: cmake-js-${{ runner.os }}-node${{ matrix.node }}
 
-      - name: Build the native addon (retried: the first step downloads from nodejs.org)
+      - name: Build the native addon (retried because the first step downloads from nodejs.org)
         shell: bash
         run: |
           for attempt in 1 2 3; do
