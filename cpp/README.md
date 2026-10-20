@@ -1,8 +1,8 @@
 # C++ analytics core
 
-A portable C++20 implementation of the analytics engine in `apps/api/src/analytics/`. **The TypeScript engine is the behavioral reference**: the C++ results must match it bit-for-bit, including error messages. A thin Node-API addon (`addon/`) exposes it to Node.js; there is no WebAssembly build yet (Stage 4).
+A portable C++20 implementation of the analytics engine in `apps/api/src/analytics/`. **The TypeScript engine is the behavioral reference**: the C++ results must match it bit-for-bit, including error messages. A thin Node-API addon (`addon/`) exposes it to Node.js, and a thin Emscripten binding (`wasm/`) compiles the same code to WebAssembly for the browser.
 
-The core library has no dependencies beyond the C++ standard library. It includes nothing from Node.js, V8, Express, browsers or Emscripten. GoogleTest is fetched only for the tests; node-addon-api and Node-API headers are used only by `addon/`.
+The core library has no dependencies beyond the C++ standard library. It includes nothing from Node.js, V8, Express, browsers or Emscripten (the WebAssembly build only adds compiler flags for it, see below). GoogleTest is fetched only for the tests; node-addon-api and Node-API headers are used only by `addon/`.
 
 ## Layout
 
@@ -20,6 +20,11 @@ cpp/
     CMakeLists.txt          target hpa_addon (hpa_addon.node); only configured by cmake-js
     src/addon.cpp           module registration, exception -> JS error translation
     src/marshal.{hpp,cpp}   JS <-> hpa conversion (the whole boundary)
+  wasm/
+    CMakeLists.txt          target hpa_wasm -> hpa_core.{js,wasm} (Emscripten only)
+    src/wasm_api.cpp        C ABI: columns in, one call, JSON out (no analytics logic)
+    src/result_json.{hpp,cpp}  result -> JSON with 17-digit doubles
+    build.mjs  EMSCRIPTEN_VERSION   `npm run wasm:build` / `wasm:test:cpp` and the pinned version
   tests/
     fixtures/parity.txt     GENERATED from the TypeScript engine (do not edit)
     fixture.{hpp,cpp}       parity.txt loader
@@ -92,7 +97,28 @@ Application code should not call the addon directly: `apps/api/src/native/` load
 
 **Experimental addon.** `addon/experimental/` builds a second, separate module (`npm run native:experimental:build`, output `cpp/build/addon-experimental/lib/hpa_addon_experimental.node`) with alternative input representations (columnar typed arrays; a cheaper object reader). It reuses `src/marshal.cpp`'s result writer and the unchanged core, is never loaded by the API, and exists only for the benchmark in `apps/api/bench/marshalling.ts`. See the root README for the results and why production keeps the object API.
 
-Limitations: calls are synchronous and run on the main thread; the addon is built per Node.js install (Node-API makes it ABI-stable across Node versions, but the binary is platform and architecture specific); only Windows x64 / MSVC has been verified.
+Limitations: calls are synchronous and run on the main thread; the addon is built per Node.js install (Node-API makes it ABI-stable across Node versions, but the binary is platform and architecture specific); verified locally on Windows x64 / MSVC and by GitHub Actions on Windows and Ubuntu.
+
+## WebAssembly
+
+`wasm/` compiles the unchanged core to WebAssembly with Emscripten. It is a plain C ABI (`src/wasm_api.cpp`, ABI version 1) that copies caller-provided columns into `hpa::Event` values, calls `hpa::generate_events` / `hpa::compute_analytics`, and returns the result as JSON (`src/result_json.cpp`); it contains no validation, generation, sorting, aggregation or histogram logic. The JavaScript side (wrapper, Web Worker, protocol, client and tests) lives in `apps/web/src/wasm/`; see the root README for the interface, memory and error model.
+
+**Toolchain: Emscripten 6.0.13** (pinned in `wasm/EMSCRIPTEN_VERSION`; this target cannot be built with MSVC, GCC or Clang directly). Minimal setup, then build and test from the repository root:
+
+```bash
+git clone https://github.com/emscripten-core/emsdk.git && cd emsdk
+./emsdk install 6.0.13 && ./emsdk activate 6.0.13
+source ./emsdk_env.sh            # PowerShell: .\emsdk_env.ps1 ; CMake (>= 3.24) and Ninja must be on PATH too
+
+npm run wasm:build               # emcmake cmake ... -DHPA_BUILD_WASM=ON -> cpp/build/wasm/wasm/hpa_core.{js,wasm}, copied to apps/web/src/wasm/generated
+npm run wasm:test:cpp            # emcmake ... -DHPA_BUILD_TESTS=ON: the 49-test GoogleTest suite compiled to WebAssembly, run by ctest under Node.js
+```
+
+`wasm/build.mjs` checks for Emscripten before doing anything and exits non-zero with these steps if it is missing, not activated, or a different version (override with `HPA_ALLOW_EMSCRIPTEN_MISMATCH=1`, results then unverified). Equivalent manual commands: `emcmake cmake -S cpp -B cpp/build/wasm -G Ninja -DCMAKE_BUILD_TYPE=Release -DHPA_BUILD_WASM=ON -DHPA_BUILD_TESTS=OFF && cmake --build cpp/build/wasm`.
+
+Build settings that matter for parity: `-fwasm-exceptions` for the whole project (the core throws `ValidationError`, caught in `wasm_api.cpp`), and the core's usual `-ffp-contract=off -fno-fast-math` (WebAssembly itself has no fused multiply-add). Output is an ES module (`-sMODULARIZE -sEXPORT_ES6`) usable from browsers, workers and Node.js; the heap starts at 32 MiB and may grow to 1 GiB, `FILESYSTEM=0`, `hpa_core.wasm` is about 63 kB (27 kB gzipped). Differences from the native build: `sizeof(hpa::Event)` is 48 bytes in wasm32 (88 natively) and `size_t` is 32-bit. The test suite additionally links with `NODERAWFS` so the parity fixture can be read from disk.
+
+The whole suite passing as WebAssembly (including the bit-for-bit fixtures) is what supports the bit-exact claim for this build; it was run on V8 (Node.js) only.
 
 ## Parity with TypeScript
 

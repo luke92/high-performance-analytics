@@ -25,7 +25,9 @@
     "bench:core:build": "npm run bench:core:build -w @hpa/api",
     "bench:compare": "npm run bench:compare -w @hpa/api --",
     "native:experimental:build": "npm run native:experimental:build -w @hpa/api",
-    "bench:marshalling": "npm run bench:marshalling -w @hpa/api --"
+    "bench:marshalling": "npm run bench:marshalling -w @hpa/api --",
+    "wasm:build": "node cpp/wasm/build.mjs",
+    "wasm:test:cpp": "node cpp/wasm/build.mjs --cpp-tests"
   },
   "devDependencies": {
     "npm-run-all2": "^8.0.0",

@@ -51,3 +51,6 @@ Thumbs.db
 
 # Benchmark reports (machine-specific)
 bench-results/
+
+# Generated WebAssembly module copied into the web app by `npm run wasm:build`
+apps/web/src/wasm/generated/
