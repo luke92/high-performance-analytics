@@ -21,7 +21,9 @@
     "fixtures:parity": "npm run fixtures:parity -w @hpa/api",
     "native:build": "npm run native:build -w @hpa/api --",
     "native:rebuild": "npm run native:rebuild -w @hpa/api --",
-    "native:check": "npm run native:check -w @hpa/api"
+    "native:check": "npm run native:check -w @hpa/api",
+    "bench:core:build": "npm run bench:core:build -w @hpa/api",
+    "bench:compare": "npm run bench:compare -w @hpa/api --"
   },
   "devDependencies": {
     "npm-run-all2": "^8.0.0",

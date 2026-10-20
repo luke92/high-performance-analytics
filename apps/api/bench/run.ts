@@ -6,9 +6,8 @@
  * Timings use performance.now() (monotonic, sub-millisecond resolution).
  * Only the TypeScript implementation exists at this stage: there is nothing to compare against.
  */
-import os from "node:os";
-import { performance } from "node:perf_hooks";
-import { computeAnalytics, generateEvents, type AnalyticsEvent, type AnalyticsResult } from "../src/analytics/index.js";
+import { computeAnalytics, generateEvents, type AnalyticsEvent } from "../src/analytics/index.js";
+import { baseEnvironment, time, verify } from "./common.js";
 
 interface Args {
   sizes: number[];
@@ -39,35 +38,6 @@ function parseArgs(argv: string[]): Args {
   return args;
 }
 
-/** Independent, deliberately naive oracle (sort with comparator, Array.reduce, linear bin search). */
-function verify(events: AnalyticsEvent[], result: AnalyticsResult, bins: number): void {
-  const fail = (msg: string): never => {
-    throw new Error(`Correctness check failed for n=${events.length}: ${msg}`);
-  };
-  const n = events.length;
-  const sorted = events.map((e) => e.value).sort((a, b) => a - b);
-  const sum = events.reduce((s, e) => s + e.value, 0);
-  if (result.summary.count !== n) fail("summary.count");
-  if (result.summary.sum !== sum) fail("summary.sum");
-  if (result.summary.min !== sorted[0] || result.summary.max !== sorted[n - 1]) fail("min/max");
-  for (const [p, got] of [[50, result.percentiles.p50], [95, result.percentiles.p95], [99, result.percentiles.p99]] as const) {
-    const rank = Math.ceil((p * n) / 100);
-    if (got !== sorted[rank - 1]) fail(`p${p}`);
-  }
-  if (result.countsByCategoryAndType.reduce((s, g) => s + g.count, 0) !== n) fail("group counts");
-  if (result.byCategory.reduce((s, g) => s + g.count, 0) !== n) fail("category counts");
-  const h = result.histogram;
-  if (h.counts.length !== bins || h.counts.reduce((a, b) => a + b, 0) !== n) fail("histogram total");
-  const { min, max } = result.summary as { min: number; max: number };
-  const width = (max - min) / bins;
-  const expected = new Array<number>(bins).fill(0);
-  for (const v of sorted) expected[width === 0 ? 0 : Math.min(bins - 1, Math.floor((v - min) / width))]!++;
-  if (expected.some((c, i) => c !== h.counts[i])) fail("histogram bins");
-  if (JSON.stringify(computeAnalytics(events, { histogramBins: bins })) !== JSON.stringify(result)) {
-    fail("non-deterministic result");
-  }
-}
-
 function stats(samples: number[]) {
   const sorted = [...samples].sort((a, b) => a - b);
   const mid = Math.floor(sorted.length / 2);
@@ -75,24 +45,10 @@ function stats(samples: number[]) {
   return { minMs: sorted[0]!, medianMs: median, maxMs: sorted[sorted.length - 1]!, samplesMs: samples };
 }
 
-function time<T>(fn: () => T): { ms: number; value: T } {
-  const start = performance.now();
-  const value = fn();
-  return { ms: performance.now() - start, value };
-}
-
 const args = parseArgs(process.argv.slice(2));
 const BINS = 10;
 
-const environment = {
-  node: process.version,
-  v8: process.versions.v8,
-  platform: `${process.platform} ${os.release()}`,
-  arch: process.arch,
-  cpu: os.cpus()[0]?.model.trim() ?? "unknown",
-  logicalCpus: os.cpus().length,
-  totalMemoryGiB: Math.round((os.totalmem() / 2 ** 30) * 10) / 10,
-};
+const environment = baseEnvironment();
 
 const results = [];
 for (const size of args.sizes) {

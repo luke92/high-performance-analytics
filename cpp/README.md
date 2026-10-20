@@ -71,7 +71,7 @@ npm run native:build      # -> cpp/build/addon/lib/hpa_addon.node (same path on 
 npm run native:check      # load + compare with TypeScript
 ```
 
-**Build approach.** `cmake-js` 8.0.0 and `node-addon-api` 8.9.2 are pinned (exact versions in `apps/api/package.json`, resolved in `package-lock.json`). cmake-js configures `cpp/CMakeLists.txt` with `-DHPA_BUILD_ADDON=ON -DHPA_BUILD_TESTS=OFF` in `cpp/build/addon/`, supplying Node-API headers from the pinned `node-api-headers` npm package (no download at build time) and, on Windows, generating `node.lib` from its symbol list. `cpp/addon/CMakeLists.txt` refuses to configure outside cmake-js and locates node-addon-api through `require.resolve`, so no absolute path is hard-coded. The addon links the existing `hpa::core` target (built with the same strict floating-point flags as for the tests) and compiles with `NAPI_VERSION=8` and C++ exceptions enabled. Nothing downloaded or compiled is committed (`cpp/build/` is git-ignored; cmake-js caches under the user's home directory).
+**Build approach.** `cmake-js` 8.0.0 and `node-addon-api` 8.9.2 are pinned (exact versions in `apps/api/package.json`, resolved in `package-lock.json`). cmake-js configures `cpp/CMakeLists.txt` with `-DHPA_BUILD_ADDON=ON -DHPA_BUILD_TESTS=OFF` in `cpp/build/addon/`, which downloads the Node.js headers (and `node.lib` on Windows) for the running Node version from nodejs.org on first use and caches them under `~/.cmake-js`; the first build therefore needs network access (CI retries it and caches the directory). `cpp/addon/CMakeLists.txt` refuses to configure outside cmake-js and locates node-addon-api through `require.resolve`, so no absolute path is hard-coded. The addon links the existing `hpa::core` target (built with the same strict floating-point flags as for the tests) and compiles with `NAPI_VERSION=8` and C++ exceptions enabled. Nothing downloaded or compiled is committed (`cpp/build/` is git-ignored; cmake-js caches under the user's home directory).
 
 **Exports** (`require("hpa_addon.node")`):
 
@@ -114,5 +114,5 @@ Floating-point requirements: the core is compiled with `/fp:strict` (MSVC) or `-
 - **Types, not runtime checks.** C++ fields are typed, so "wrong JSON type" errors (a string where a number is expected, `null`, non-object event) cannot occur. Integers are `int64_t` so that every out-of-range *number* TypeScript rejects is also rejected here.
 - **Messages use the TypeScript field names** (`events[1].value`, `histogramBins`, `startTimestamp`), not the C++ member names, so the strings are identical.
 - **Absent values** are `std::optional<double>` instead of `null`.
-- **Timing:** nothing here is benchmarked or optimized yet; this stage is about correctness.
+- **Timing:** the core is not tuned. `bench/hpa_bench.cpp` (target `hpa_bench`, `npm run bench:core:build`, option `HPA_BUILD_BENCH`) times generate, validate and compute directly, without Node.js; `npm run bench:compare` combines it with the TypeScript and addon measurements. See the root README for methodology and results.
 - **Linux/GCC/Clang:** the code is written to be portable but has only been built and tested with MSVC so far.

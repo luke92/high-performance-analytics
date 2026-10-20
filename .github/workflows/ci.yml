@@ -69,8 +69,22 @@ jobs:
 
       - run: npm ci
 
-      - name: Build the native addon
-        run: npm run native:build
+      # cmake-js downloads Node's headers (and node.lib on Windows) from nodejs.org on first use.
+      - name: Cache cmake-js downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.cmake-js
+          key: cmake-js-${{ runner.os }}-node${{ matrix.node }}
+
+      - name: Build the native addon (retried because the first step downloads from nodejs.org)
+        shell: bash
+        run: |
+          for attempt in 1 2 3; do
+            npm run native:build && exit 0
+            echo "native:build failed (attempt $attempt of 3); retrying in 15s"
+            sleep 15
+          done
+          exit 1
 
       - name: Load the addon and compare it with TypeScript
         run: npm run native:check
@@ -78,3 +92,10 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
+
+      # Smoke test of the benchmark harness: exercises its equivalence checks on this platform.
+      # Timings are never asserted (shared CI runners are too noisy for that).
+      - name: Benchmark harness smoke test
+        run: |
+          npm run bench:core:build
+          npm run bench:compare -- --sizes=1000 --http-sizes=1000 --core-sizes=1000 --warmup=1 --runs=3 --http-warmup=1 --http-runs=3 --core-warmup=1 --core-runs=3 --out=bench-results/ci-smoke.json

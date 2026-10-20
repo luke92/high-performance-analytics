@@ -48,3 +48,6 @@ cpp/wasm/dist/
 # OS
 .DS_Store
 Thumbs.db
+
+# Benchmark reports (machine-specific)
+bench-results/
